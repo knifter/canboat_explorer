@@ -22,6 +22,7 @@ class RawFrame:
     dlc: int               # 0xFF = error/malformed marker
     data: bytes            # always 8 bytes (zero-padded); error text for error frames
     is_extended_id: bool = True
+    is_remote_frame: bool = False
     is_error: bool = False # True for frames the adapter sent but we couldn't parse
 
 
@@ -117,6 +118,7 @@ class CanReader(threading.Thread):
                     dlc=dlc,
                     data=data,
                     is_extended_id=msg.is_extended_id,
+                    is_remote_frame=bool(msg.is_remote_frame),
                 )
                 self.frame_queue.put(frame)
         finally:
