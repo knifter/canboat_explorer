@@ -11,9 +11,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
-from nemafiddler.can_reader import RawFrame
-from nemafiddler.n2k import N2KFrame, parse as n2k_parse
-from nemafiddler.session_log import SessionLog
+from nemafiddler.bus.can_reader import RawFrame
+from nemafiddler.core.n2k import N2KFrame, parse as n2k_parse
+from nemafiddler.core.session_log import SessionLog
 
 Priority = Literal["ignore", "highlight"] | None
 

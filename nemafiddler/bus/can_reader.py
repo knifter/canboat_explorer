@@ -124,7 +124,7 @@ class CanReader(threading.Thread):
 
     def _open_bus(self) -> can.BusABC:
         if self.interface == "waveshare":
-            from nemafiddler.waveshare_bus import WaveshareCANBus
+            from nemafiddler.bus.waveshare_bus import WaveshareCANBus
             return WaveshareCANBus(channel=str(self.channel), bitrate=self.BITRATE)
 
         kwargs: dict = {"interface": self.interface, "channel": self.channel}

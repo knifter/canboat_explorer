@@ -12,8 +12,8 @@ from PyQt6.QtWidgets import (
     QHeaderView,
 )
 
-from nemafiddler.n2k import parse as n2k_parse, pgn_name
-from nemafiddler.store import DataStore, Priority
+from nemafiddler.core.n2k import parse as n2k_parse, pgn_name
+from nemafiddler.core.store import DataStore, Priority
 
 _COLS_TIME   = ["Time", "Arb ID", "PGN", "SA", "Prio", "DLC", "Data"]
 _COLS_ACCUM  = ["Arb ID", "PGN", "SA", "Count", "DLC", "Last Data", "Last Time"]

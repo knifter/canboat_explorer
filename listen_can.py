@@ -2,29 +2,30 @@
 Command-line CAN frame monitor.
 
 Usage:
-    python -m nemafiddler.listen_can [interface] [channel]
+    python listen_can.py [interface] [channel]
 
 Defaults to waveshare / COM7.
 
 Examples:
-    python -m nemafiddler.listen_can
-    python -m nemafiddler.listen_can waveshare COM7
-    python -m nemafiddler.listen_can gs_usb 0
-    python -m nemafiddler.listen_can slcan COM5
+    python listen_can.py
+    python listen_can.py -p COM21
+    python listen_can.py waveshare -p COM7
+    python listen_can.py slcan -p COM5
+    python listen_can.py --raw -p COM21
 """
 from __future__ import annotations
 
 import sys
 import time
 
-from nemafiddler.n2k import pgn_from_id, pgn_name
+from nemafiddler.core.n2k import pgn_from_id, pgn_name
 
 BITRATE = 250_000
 
 
 def _open_bus(interface: str, channel: str | int):
     if interface == "waveshare":
-        from nemafiddler.waveshare_bus import WaveshareCANBus
+        from nemafiddler.bus.waveshare_bus import WaveshareCANBus
         return WaveshareCANBus(channel=str(channel), bitrate=BITRATE)
 
     import can
@@ -118,19 +119,16 @@ def raw_dump(port: str, baudrate: int = 2_000_000, seconds: float = 4.0) -> None
 
 
 if __name__ == "__main__":
-    args = sys.argv[1:]
+    import argparse
+    ap = argparse.ArgumentParser(description="CAN frame monitor")
+    ap.add_argument("interface", nargs="?", default="waveshare")
+    ap.add_argument("-p", "--port", default="COM7", help="serial port / channel")
+    ap.add_argument("--raw", action="store_true", help="raw byte dump mode")
+    ap.add_argument("--baud", type=int, default=2_000_000, help="UART baud (raw mode)")
+    ap.add_argument("--seconds", type=float, default=4.0, help="dump duration (raw mode)")
+    ns = ap.parse_args()
 
-    if args and args[0] == "--raw":
-        port = args[1] if len(args) > 1 else "COM7"
-        baud = int(args[2]) if len(args) > 2 else 2_000_000
-        raw_dump(port, baud)
-        sys.exit(0)
-
-    if len(args) == 0:
-        monitor()
-    elif len(args) == 1:
-        monitor(interface=args[0])
+    if ns.raw:
+        raw_dump(ns.port, ns.baud, ns.seconds)
     else:
-        iface   = args[0]
-        channel = int(args[1]) if args[1].isdigit() else args[1]
-        monitor(interface=iface, channel=channel)
+        monitor(interface=ns.interface, channel=ns.port)

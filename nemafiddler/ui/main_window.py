@@ -8,10 +8,10 @@ from PyQt6.QtWidgets import (
     QStatusBar, QTabWidget, QToolBar, QWidget,
 )
 
-from nemafiddler.can_reader import CanReader, RawFrame
-from nemafiddler.paths import DATA_DIR
-from nemafiddler.session_log import SessionLog
-from nemafiddler.store import DataStore
+from nemafiddler.bus.can_reader import CanReader, RawFrame
+from nemafiddler.core.paths import DATA_DIR
+from nemafiddler.core.session_log import SessionLog
+from nemafiddler.core.store import DataStore
 from nemafiddler.ui.tab_raw_can import RawCanTab
 
 _INTERFACES = ["waveshare", "slcan", "gs_usb", "pcan", "socketcan"]

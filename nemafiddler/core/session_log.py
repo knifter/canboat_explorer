@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 from typing import Iterator
 
-from nemafiddler.can_reader import RawFrame
+from nemafiddler.bus.can_reader import RawFrame
 
 RECORD_SIZE = 21
 _PACK = struct.Struct(">dIB8s")   # float64, uint32, uint8, 8s  → 21 bytes
@@ -124,5 +124,5 @@ class SessionLog:
     @staticmethod
     def default_path() -> Path:
         """Returns the canonical path for the active session log."""
-        from nemafiddler.paths import DATA_DIR
+        from nemafiddler.core.paths import DATA_DIR
         return DATA_DIR / "session.canlog"
