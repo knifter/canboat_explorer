@@ -144,14 +144,16 @@ class DataStore:
     # Session clear
     # ------------------------------------------------------------------
 
-    def clear(self) -> None:
-        """Archive the current log, reset in-memory state, start fresh."""
-        self.log.close()
-        SessionLog.archive(self.log.path)
-        new_log = SessionLog(self.log.path, append=True)
-        self.log = new_log
-
+    def reset_memory(self) -> None:
+        """Clear all in-memory state without touching the log."""
         self.frames.clear()
         self.by_arb_id.clear()
         self.by_pgn_sa.clear()
         self.by_pgn.clear()
+
+    def clear(self) -> None:
+        """Archive the current log, reset in-memory state, start fresh."""
+        self.log.close()
+        SessionLog.archive(self.log.path)
+        self.log = SessionLog(self.log.path, append=True)
+        self.reset_memory()

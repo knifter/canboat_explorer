@@ -111,6 +111,13 @@ class SessionLog:
     # ------------------------------------------------------------------
 
     @staticmethod
+    def write_frames(frames: list, path: Path) -> None:
+        """Write a list of RawFrame objects to a new file (overwrites)."""
+        with path.open("wb") as fh:
+            for frame in frames:
+                fh.write(encode(frame))
+
+    @staticmethod
     def archive(path: Path) -> Path:
         """
         Rename `path` to a timestamped archive copy and return the new path.
