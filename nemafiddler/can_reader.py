@@ -4,6 +4,7 @@ to a thread-safe queue. Supports pause/resume without disconnecting.
 """
 from __future__ import annotations
 
+import logging
 import queue
 import threading
 import time
@@ -11,13 +12,17 @@ from dataclasses import dataclass
 
 import can
 
+log = logging.getLogger(__name__)
+
 
 @dataclass(slots=True)
 class RawFrame:
     timestamp: float       # seconds since epoch (time.time())
     arbitration_id: int
-    dlc: int
-    data: bytes            # always 8 bytes (zero-padded)
+    dlc: int               # 0xFF = error/malformed marker
+    data: bytes            # always 8 bytes (zero-padded); error text for error frames
+    is_extended_id: bool = True
+    is_error: bool = False # True for frames the adapter sent but we couldn't parse
 
 
 class CanReader(threading.Thread):
@@ -81,37 +86,49 @@ class CanReader(threading.Thread):
                 if self._stop_flag.is_set():
                     break
 
-                msg = bus.recv(timeout=0.1)
+                try:
+                    msg = bus.recv(timeout=0.1)
+                except Exception as exc:
+                    log.warning("recv error: %s", exc)
+                    # Push a placeholder so the UI and log see it — DLC=0xFF is the marker
+                    err_text = str(exc)[:8].encode("ascii", errors="replace").ljust(8, b"\x00")
+                    self.frame_queue.put(RawFrame(
+                        timestamp=time.time(),
+                        arbitration_id=0,
+                        dlc=0xFF,
+                        data=err_text,
+                        is_extended_id=False,
+                        is_error=True,
+                    ))
+                    continue
+
                 if msg is None:
                     continue
 
-                data = bytes(msg.data).ljust(8, b"\x00")[:8]
+                dlc = msg.dlc
+                if dlc < 0 or dlc > 15:
+                    log.error("impossible DLC %d from adapter", dlc)
+                elif dlc > 8:
+                    log.warning("DLC %d on classic CAN frame (9-15 = 8 data bytes)", dlc)
+                data = bytes(msg.data)[:8].ljust(8, b"\x00")
                 frame = RawFrame(
                     timestamp=time.time(),
                     arbitration_id=msg.arbitration_id,
-                    dlc=msg.dlc,
+                    dlc=dlc,
                     data=data,
+                    is_extended_id=msg.is_extended_id,
                 )
                 self.frame_queue.put(frame)
         finally:
             bus.shutdown()
 
     def _open_bus(self) -> can.BusABC:
-        kwargs: dict = {"interface": self.interface, "channel": self.channel}
-
         if self.interface == "waveshare":
-            # Waveshare USB-CAN-A uses a custom binary protocol via pyserial.
-            # python-can wraps it as interface='serial' with bitrate.
-            kwargs = {
-                "interface": "serial",
-                "channel": self.channel,
-                "bitrate": self.BITRATE,
-            }
-        elif self.interface in ("slcan",):
-            kwargs["bitrate"] = self.BITRATE
-        elif self.interface == "gs_usb":
-            kwargs["bitrate"] = self.BITRATE
-        elif self.interface == "pcan":
+            from nemafiddler.waveshare_bus import WaveshareCANBus
+            return WaveshareCANBus(channel=str(self.channel), bitrate=self.BITRATE)
+
+        kwargs: dict = {"interface": self.interface, "channel": self.channel}
+        if self.interface in ("slcan", "gs_usb", "pcan"):
             kwargs["bitrate"] = self.BITRATE
         # socketcan: bitrate is set at OS level, not passed here
 

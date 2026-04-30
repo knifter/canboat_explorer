@@ -26,7 +26,15 @@ def encode(frame: RawFrame) -> bytes:
 
 def decode(raw: bytes) -> RawFrame:
     ts, arb_id, dlc, data = _PACK.unpack(raw)
-    return RawFrame(timestamp=ts, arbitration_id=arb_id, dlc=dlc, data=data)
+    is_error = dlc == 0xFF
+    return RawFrame(
+        timestamp=ts,
+        arbitration_id=arb_id,
+        dlc=dlc,
+        data=data,
+        is_extended_id=(not is_error) and (arb_id > 0x7FF),
+        is_error=is_error,
+    )
 
 
 class SessionLog:
