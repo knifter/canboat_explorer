@@ -9,8 +9,9 @@ from PyQt6.QtWidgets import (
 )
 
 from nemafiddler.bus.can_reader import CanReader, RawFrame
-from nemafiddler.core.paths import DATA_DIR
+from nemafiddler.core.paths import data_dir
 from nemafiddler.core.session_log import SessionLog
+from nemafiddler.core.settings import settings
 from nemafiddler.core.store import DataStore
 from nemafiddler.ui.tab_raw_can import RawCanTab
 
@@ -39,7 +40,7 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _init_store(self) -> None:
-        log_path = DATA_DIR / "session.canlog"
+        log_path = data_dir() / "session.canlog"
         self._log = SessionLog(log_path, append=True)
         sidecar   = log_path.with_suffix(".json")
         self._store = DataStore(self._log, sidecar)
@@ -60,10 +61,13 @@ class MainWindow(QMainWindow):
         tb.addWidget(QLabel("Interface: "))
         self._iface_combo = QComboBox()
         self._iface_combo.addItems(_INTERFACES)
+        iface_idx = self._iface_combo.findText(settings.last_interface)
+        if iface_idx >= 0:
+            self._iface_combo.setCurrentIndex(iface_idx)
         tb.addWidget(self._iface_combo)
 
         tb.addWidget(QLabel("  Channel: "))
-        self._channel_edit = QLineEdit("COM7")
+        self._channel_edit = QLineEdit(settings.last_port)
         self._channel_edit.setFixedWidth(100)
         tb.addWidget(self._channel_edit)
 
@@ -143,6 +147,9 @@ class MainWindow(QMainWindow):
     def _connect(self) -> None:
         iface   = self._iface_combo.currentText()
         channel = self._channel_edit.text().strip()
+
+        settings.last_interface = iface
+        settings.last_port      = channel
 
         self._reader = CanReader(iface, channel, self._frame_queue)
         self._reader.start()

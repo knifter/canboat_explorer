@@ -1,11 +1,15 @@
 """Central location for application data paths."""
-from pathlib import Path
-import sys
+from __future__ import annotations
 
-if sys.platform == "win32":
-    _base = Path.home() / "AppData" / "Local" / "NemaFiddler"
-else:
-    _base = Path.home() / ".local" / "share" / "NemaFiddler"
+from nemafiddler.core.settings import settings
 
-DATA_DIR = _base
-DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+def data_dir():
+    d = settings.data_dir
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+# Keep DATA_DIR as a module-level convenience; callers that need the live
+# value (e.g. after a settings change) should call data_dir() directly.
+DATA_DIR = data_dir()
