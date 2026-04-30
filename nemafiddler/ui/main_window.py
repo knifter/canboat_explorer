@@ -32,6 +32,7 @@ class MainWindow(QMainWindow):
         self._build_tabs()
         self._build_statusbar()
         self._build_timer()
+        self._tab_raw.on_frames_added()
 
     # ------------------------------------------------------------------
     # Store / session log

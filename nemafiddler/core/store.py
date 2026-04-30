@@ -23,6 +23,20 @@ class AccumEntry:
     last_frame: RawFrame
     count: int
     last_n2k: N2KFrame | None = None
+    first_ts: float = 0.0   # timestamp of the first frame seen for this key
+
+    def __post_init__(self) -> None:
+        if self.first_ts == 0.0:
+            self.first_ts = self.last_frame.timestamp
+
+    @property
+    def interval_ms(self) -> float | None:
+        if self.count < 2:
+            return None
+        elapsed = self.last_frame.timestamp - self.first_ts
+        if elapsed <= 0:
+            return None
+        return elapsed / (self.count - 1) * 1000
 
 
 class DataStore:
@@ -33,6 +47,7 @@ class DataStore:
         self.frames: list[RawFrame] = []
         self.by_arb_id: dict[int, AccumEntry] = {}
         self.by_pgn_sa: dict[tuple[int, int], AccumEntry] = {}
+        self.by_pgn: dict[int, AccumEntry] = {}
 
         # JSON-serialisable flag dict; keys are "a:<arb_id>" or "p:<pgn>"
         self._flags: dict[str, str] = {}
@@ -58,19 +73,29 @@ class DataStore:
         if frame.is_error:
             return   # error frames are stored in time list only
 
+        n2k = n2k_parse(frame)
+
         entry = self.by_arb_id.get(frame.arbitration_id)
         if entry is None:
-            self.by_arb_id[frame.arbitration_id] = AccumEntry(frame, 1)
+            self.by_arb_id[frame.arbitration_id] = AccumEntry(frame, 1, n2k)
         else:
             entry.last_frame = frame
+            entry.last_n2k   = n2k
             entry.count += 1
 
-        n2k = n2k_parse(frame)
         if n2k is not None:
             key = (n2k.pgn, n2k.sa)
             entry = self.by_pgn_sa.get(key)
             if entry is None:
                 self.by_pgn_sa[key] = AccumEntry(frame, 1, n2k)
+            else:
+                entry.last_frame = frame
+                entry.count += 1
+                entry.last_n2k = n2k
+
+            entry = self.by_pgn.get(n2k.pgn)
+            if entry is None:
+                self.by_pgn[n2k.pgn] = AccumEntry(frame, 1, n2k)
             else:
                 entry.last_frame = frame
                 entry.count += 1
@@ -129,3 +154,4 @@ class DataStore:
         self.frames.clear()
         self.by_arb_id.clear()
         self.by_pgn_sa.clear()
+        self.by_pgn.clear()
