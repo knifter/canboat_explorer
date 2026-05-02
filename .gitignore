@@ -1,3 +1,5 @@
 **/__pycache__
 data
 nemafiddler.ini
+nemafiddler.egg-info
+uv.lock
