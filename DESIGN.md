@@ -20,15 +20,6 @@ A desktop application for exploring, debugging, and recording CAN / NMEA 2000 bu
   - *Live*: connected to adapter, appending to the active session log. A **Pause / Continue** button suspends frame capture without disconnecting.
   - *Read-only / Open*: a saved file is opened for offline browsing; live capture redirects to that file (subsequent frames append there).
 
-D:\Projects\NemaFiddler (main)
-λ python -m nemafiddler
-Traceback (most recent call last):
-  File "<frozen runpy>", line 198, in _run_module_as_main
-  File "<frozen runpy>", line 88, in _run_code
-  File "D:\Projects\NemaFiddler\nemafiddler\__main__.py", line 2, in <module>
-    from PyQt6.QtWidgets import QApplication
-ModuleNotFoundError: No module named 'PyQt6'---
-
 ## Requirements
 
 - **Adapter connection** — connect to one USB CAN adapter at a time. Supported types (via python-can): `waveshare`, `slcan`, `gs_usb`, `pcan`, `socketcan`. NMEA 2000 bitrate is always 250 kbps.
