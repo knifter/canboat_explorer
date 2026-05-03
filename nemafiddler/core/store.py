@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Literal
 
 from nemafiddler.bus.can_reader import RawFrame
+from nemafiddler.core.fast_packet import FastPacketReassembler, N2KMessage
 from nemafiddler.core.n2k import N2KFrame, parse as n2k_parse
 from nemafiddler.core.session_log import SessionLog
 
@@ -48,6 +49,8 @@ class DataStore:
         self.by_arb_id: dict[int, AccumEntry] = {}
         self.by_pgn_sa: dict[tuple[int, int], AccumEntry] = {}
         self.by_pgn: dict[int, AccumEntry] = {}
+        self.n2k_messages: list[N2KMessage] = []
+        self._fp = FastPacketReassembler()
 
         # JSON-serialisable flag dict; keys are "a:<arb_id>" or "p:<pgn>"
         self._flags: dict[str, str] = {}
@@ -74,6 +77,7 @@ class DataStore:
             return   # error frames are stored in time list only
 
         n2k = n2k_parse(frame)
+        self.n2k_messages.extend(self._fp.feed(frame, n2k))
 
         entry = self.by_arb_id.get(frame.arbitration_id)
         if entry is None:
@@ -150,6 +154,8 @@ class DataStore:
         self.by_arb_id.clear()
         self.by_pgn_sa.clear()
         self.by_pgn.clear()
+        self.n2k_messages.clear()
+        self._fp = FastPacketReassembler()
 
     def clear(self) -> None:
         """Archive the current log, reset in-memory state, start fresh."""

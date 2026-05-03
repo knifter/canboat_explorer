@@ -15,6 +15,7 @@ from nemafiddler.core.paths import data_dir
 from nemafiddler.core.session_log import SessionLog
 from nemafiddler.core.settings import settings
 from nemafiddler.core.store import DataStore
+from nemafiddler.ui.tab_n2k import N2KTab
 from nemafiddler.ui.tab_raw_can import RawCanTab
 
 _INTERFACES        = ["waveshare", "slcan", "gs_usb", "pcan", "socketcan"]
@@ -41,6 +42,7 @@ class MainWindow(QMainWindow):
         self._build_timer()
         self._update_title()
         self._tab_raw.on_frames_added()
+        self._tab_n2k.on_messages_added()
 
     # ------------------------------------------------------------------
     # Store / session log
@@ -145,8 +147,10 @@ class MainWindow(QMainWindow):
     def _build_tabs(self) -> None:
         self._tabs = QTabWidget()
         self._tab_raw = RawCanTab(self._store)
+        self._tab_n2k = N2KTab(self._store)
         self._tabs.addTab(self._tab_raw, "Raw CAN")
-        for name in ("NMEA 2000", "Network", "Decoded Values"):
+        self._tabs.addTab(self._tab_n2k, "NMEA 2000")
+        for name in ("Network", "Decoded Values"):
             self._tabs.addTab(QLabel(f"[{name} — not yet implemented]"), name)
         self.setCentralWidget(self._tabs)
 
@@ -182,6 +186,7 @@ class MainWindow(QMainWindow):
         for frame in batch:
             self._store.ingest(frame)
         self._tab_raw.on_frames_added()
+        self._tab_n2k.on_messages_added()
 
     # ------------------------------------------------------------------
     # File actions
@@ -200,6 +205,7 @@ class MainWindow(QMainWindow):
         self._store.reset_memory()
         self._store.bulk_load(frames)
         self._tab_raw.on_frames_added()
+        self._tab_n2k.reset()
 
     def _action_save(self) -> None:
         path_str, _ = QFileDialog.getSaveFileName(
@@ -225,6 +231,7 @@ class MainWindow(QMainWindow):
         self._store.log = SessionLog(active_path, append=True)
         self._store.reset_memory()
         self._tab_raw.on_frames_added()
+        self._tab_n2k.reset()
 
     def _redirect_log(self, new_path: Path, write_frames: list | None) -> None:
         """
