@@ -34,18 +34,20 @@ class CanReader(threading.Thread):
     NMEA 2000 bitrate is always 250 kbps.
     """
 
-    BITRATE = 250_000
-
     def __init__(
         self,
         interface: str,
         channel: str | int,
         frame_queue: queue.Queue[RawFrame],
+        serial_baud: int = 2_000_000,
+        can_baud: int = 250_000,
     ) -> None:
         super().__init__(daemon=True, name="CanReader")
         self.interface = interface
         self.channel = channel
         self.frame_queue = frame_queue
+        self.serial_baud = serial_baud
+        self.can_baud = can_baud
 
         self._paused = threading.Event()
         self._paused.set()          # not paused initially
@@ -127,11 +129,15 @@ class CanReader(threading.Thread):
     def _open_bus(self) -> can.BusABC:
         if self.interface == "waveshare":
             from nemafiddler.bus.waveshare_bus import WaveshareCANBus
-            return WaveshareCANBus(channel=str(self.channel), bitrate=self.BITRATE)
+            return WaveshareCANBus(
+                channel=str(self.channel),
+                tty_baudrate=self.serial_baud,
+                bitrate=self.can_baud,
+            )
 
         kwargs: dict = {"interface": self.interface, "channel": self.channel}
         if self.interface in ("slcan", "gs_usb", "pcan"):
-            kwargs["bitrate"] = self.BITRATE
+            kwargs["bitrate"] = self.can_baud
         # socketcan: bitrate is set at OS level, not passed here
 
         return can.Bus(**kwargs)

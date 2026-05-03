@@ -6,7 +6,7 @@ from pathlib import Path
 from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import (
-    QComboBox, QFileDialog, QLabel, QLineEdit, QMainWindow, QMessageBox,
+    QFileDialog, QLabel, QMainWindow, QMessageBox,
     QPushButton, QStatusBar, QStyle, QTabWidget, QToolBar, QWidget,
 )
 
@@ -15,10 +15,10 @@ from nemafiddler.core.paths import data_dir
 from nemafiddler.core.session_log import SessionLog
 from nemafiddler.core.settings import settings
 from nemafiddler.core.store import DataStore
+from nemafiddler.ui.settings_dialog import SettingsDialog
 from nemafiddler.ui.tab_n2k import N2KTab
 from nemafiddler.ui.tab_raw_can import RawCanTab
 
-_INTERFACES        = ["waveshare", "slcan", "gs_usb", "pcan", "socketcan"]
 _DRAIN_INTERVAL_MS = 50
 _CANLOG_FILTER     = "CAN Log (*.canlog);;All files (*)"
 
@@ -62,10 +62,11 @@ class MainWindow(QMainWindow):
 
     def _build_actions(self) -> None:
         sp = self.style().standardIcon
-        self._act_open  = QAction(sp(QStyle.StandardPixmap.SP_DialogOpenButton), "Open…",    self)
-        self._act_save  = QAction(sp(QStyle.StandardPixmap.SP_DialogSaveButton), "Save as…", self)
-        self._act_clear = QAction(sp(QStyle.StandardPixmap.SP_TrashIcon),         "Clear",    self)
-        self._act_exit  = QAction("Exit", self)
+        self._act_open     = QAction(sp(QStyle.StandardPixmap.SP_DialogOpenButton),    "Open…",     self)
+        self._act_save     = QAction(sp(QStyle.StandardPixmap.SP_DialogSaveButton),    "Save as…",  self)
+        self._act_clear    = QAction(sp(QStyle.StandardPixmap.SP_TrashIcon),            "Clear",     self)
+        self._act_settings = QAction(sp(QStyle.StandardPixmap.SP_FileDialogDetailedView), "Settings…", self)
+        self._act_exit     = QAction("Exit", self)
         self._act_open.setShortcut("Ctrl+O")
         self._act_save.setShortcut("Ctrl+S")
         self._act_clear.setShortcut("Ctrl+L")
@@ -73,6 +74,7 @@ class MainWindow(QMainWindow):
         self._act_open.triggered.connect(self._action_open)
         self._act_save.triggered.connect(self._action_save)
         self._act_clear.triggered.connect(self._action_clear)
+        self._act_settings.triggered.connect(self._action_settings)
         self._act_exit.triggered.connect(self.close)
 
     def _build_menubar(self) -> None:
@@ -82,6 +84,8 @@ class MainWindow(QMainWindow):
         file_menu.addAction(self._act_save)
         file_menu.addSeparator()
         file_menu.addAction(self._act_clear)
+        file_menu.addSeparator()
+        file_menu.addAction(self._act_settings)
         file_menu.addSeparator()
         file_menu.addAction(self._act_exit)
         about_menu = mb.addMenu("About")
@@ -107,26 +111,13 @@ class MainWindow(QMainWindow):
         tb.addAction(self._act_open)
         tb.addAction(self._act_save)
         tb.addAction(self._act_clear)
+        tb.addSeparator()
+        tb.addAction(self._act_settings)
 
     def _build_conn_toolbar(self) -> None:
         tb = QToolBar("Connection")
         tb.setMovable(False)
         self.addToolBar(tb)
-
-        tb.addWidget(QLabel("Interface: "))
-        self._iface_combo = QComboBox()
-        self._iface_combo.addItems(_INTERFACES)
-        idx = self._iface_combo.findText(settings.last_interface)
-        if idx >= 0:
-            self._iface_combo.setCurrentIndex(idx)
-        tb.addWidget(self._iface_combo)
-
-        tb.addWidget(QLabel("  Channel: "))
-        self._channel_edit = QLineEdit(settings.last_port)
-        self._channel_edit.setFixedWidth(100)
-        tb.addWidget(self._channel_edit)
-
-        tb.addSeparator()
 
         sp = self.style().standardIcon
         self._connect_btn = QPushButton(sp(QStyle.StandardPixmap.SP_DriveNetIcon), "Connect")
@@ -233,6 +224,10 @@ class MainWindow(QMainWindow):
         self._tab_raw.on_frames_added()
         self._tab_n2k.reset()
 
+    def _action_settings(self) -> None:
+        dlg = SettingsDialog(self)
+        dlg.exec()
+
     def _redirect_log(self, new_path: Path, write_frames: list | None) -> None:
         """
         Close the current log, optionally write frames to new_path from scratch,
@@ -278,21 +273,19 @@ class MainWindow(QMainWindow):
             self._connect()
 
     def _connect(self) -> None:
-        iface   = self._iface_combo.currentText()
-        channel = self._channel_edit.text().strip()
-
-        settings.last_interface = iface
-        settings.last_port      = channel
-
-        self._reader = CanReader(iface, channel, self._frame_queue)
+        iface   = settings.last_interface
+        channel = settings.last_port
+        self._reader = CanReader(
+            iface, channel, self._frame_queue,
+            serial_baud=settings.last_serial_baud,
+            can_baud=settings.last_can_baud,
+        )
         self._reader.start()
 
         self._connect_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserStop))
         self._connect_btn.setText("Disconnect")
         self._pause_btn.setEnabled(True)
         self._status_label.setText(f"Connected — {iface} / {channel}")
-        self._iface_combo.setEnabled(False)
-        self._channel_edit.setEnabled(False)
 
         QTimer.singleShot(500, self._check_reader_error)
 
@@ -313,8 +306,6 @@ class MainWindow(QMainWindow):
         self._pause_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPause))
         self._pause_btn.setText("Pause")
         self._status_label.setText("Disconnected")
-        self._iface_combo.setEnabled(True)
-        self._channel_edit.setEnabled(True)
 
     # ------------------------------------------------------------------
     # Pause / Continue
@@ -328,7 +319,7 @@ class MainWindow(QMainWindow):
             self._pause_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPause))
             self._pause_btn.setText("Pause")
             self._status_label.setText(
-                f"Connected — {self._iface_combo.currentText()} / {self._channel_edit.text()}")
+                f"Connected — {settings.last_interface} / {settings.last_port}")
         else:
             self._reader.pause()
             self._pause_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))

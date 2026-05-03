@@ -18,8 +18,10 @@ _DEFAULTS: dict[str, dict[str, str]] = {
         "data_dir": str(_APP_DIR / "data"),
     },
     "connection": {
-        "last_interface": "waveshare",
-        "last_port":      "COM7",
+        "last_interface":  "waveshare",
+        "last_port":       "COM7",
+        "last_serial_baud": "2000000",
+        "last_can_baud":    "250000",
     },
 }
 
@@ -64,6 +66,24 @@ class Settings:
     @last_port.setter
     def last_port(self, value: str) -> None:
         self._cfg["connection"]["last_port"] = value
+        self._save()
+
+    @property
+    def last_serial_baud(self) -> int:
+        return int(self._cfg["connection"]["last_serial_baud"])
+
+    @last_serial_baud.setter
+    def last_serial_baud(self, value: int) -> None:
+        self._cfg["connection"]["last_serial_baud"] = str(value)
+        self._save()
+
+    @property
+    def last_can_baud(self) -> int:
+        return int(self._cfg["connection"]["last_can_baud"])
+
+    @last_can_baud.setter
+    def last_can_baud(self, value: int) -> None:
+        self._cfg["connection"]["last_can_baud"] = str(value)
         self._save()
 
     # ------------------------------------------------------------------
