@@ -10,7 +10,8 @@ from PyQt6.QtWidgets import (
     QPushButton, QStatusBar, QStyle, QTabWidget, QToolBar, QWidget,
 )
 
-from nemafiddler.bus.can_reader import CanReader, RawFrame
+import can
+from nemafiddler.bus.can_reader import CanReader
 from nemafiddler.core.paths import data_dir
 from nemafiddler.core.session_log import SessionLog
 from nemafiddler.core.settings import settings
@@ -29,7 +30,7 @@ class MainWindow(QMainWindow):
         self.resize(1200, 700)
 
         self._reader: CanReader | None = None
-        self._frame_queue: queue.Queue[RawFrame] = queue.Queue()
+        self._frame_queue: queue.Queue[can.Message] = queue.Queue()
         self._session_path = data_dir() / "session.canlog"
 
         self._init_store()
@@ -166,9 +167,14 @@ class MainWindow(QMainWindow):
         self._timer.start()
 
     def _drain_queue(self) -> None:
+        if self._reader and not self._reader.is_alive() and self._reader.error:
+            err = self._reader.error
+            self._disconnect()
+            self._status_label.setText(f"Connection error: {err}")
+            return
         if self._frame_queue.empty():
             return
-        batch: list[RawFrame] = []
+        batch: list[can.Message] = []
         try:
             while True:
                 batch.append(self._frame_queue.get_nowait())

@@ -1,9 +1,7 @@
 """NMEA 2000 frame parsing utilities."""
 from __future__ import annotations
 
-from dataclasses import dataclass
-
-from nemafiddler.bus.can_reader import RawFrame
+import can
 
 PGN_NAMES: dict[int, str] = {
     59392:	"ISO Acknowledgement",
@@ -131,27 +129,11 @@ PGN_NAMES: dict[int, str] = {
     130918: "Raymarine Route and Waypoint Information",
 }	
 
-@dataclass(slots=True)
-class N2KFrame:
-    raw: RawFrame
-    pgn: int
-    sa: int       # source address (0–253)
-    dst: int      # destination address (255 = broadcast)
-    priority: int
-
-
-def pgn_from_id(arb_id: int) -> int:
-    dp = (arb_id >> 24) & 0x01
-    pf = (arb_id >> 16) & 0xFF
-    ps = (arb_id >>  8) & 0xFF
-    return ((dp << 16) | (pf << 8) | ps) if pf >= 240 else ((dp << 16) | (pf << 8))
-
-
-def parse(frame: RawFrame) -> N2KFrame | None:
-    """Return N2KFrame for extended-ID frames; None for standard CAN frames."""
-    if not frame.is_extended_id:
+def parse(msg: can.Message) -> tuple[int, int, int, int] | None:
+    """Return (pgn, sa, priority, dst) for extended-ID frames; None for standard."""
+    if not msg.is_extended_id:
         return None
-    arb      = frame.arbitration_id
+    arb      = msg.arbitration_id
     priority = (arb >> 26) & 0x07
     dp       = (arb >> 24) & 0x01
     pf       = (arb >> 16) & 0xFF
@@ -159,7 +141,7 @@ def parse(frame: RawFrame) -> N2KFrame | None:
     sa       =  arb        & 0xFF
     pgn      = ((dp << 16) | (pf << 8) | ps) if pf >= 240 else ((dp << 16) | (pf << 8))
     dst      = ps if pf < 240 else 255
-    return N2KFrame(raw=frame, pgn=pgn, sa=sa, dst=dst, priority=priority)
+    return (pgn, sa, priority, dst)
 
 
 def pgn_name(pgn: int) -> str:

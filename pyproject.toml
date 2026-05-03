@@ -9,6 +9,7 @@ dependencies = [
     "PyQt6>=6.6",
     "python-can>=4.3",
     "pyserial",
+    "nmea2000",
 ]
 
 [project.scripts]

@@ -13,8 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from nemafiddler.bus.can_reader import RawFrame
-from nemafiddler.core.n2k import N2KFrame  # used for type hint in feed()
+import can
 
 _STALE_S = 0.010  # 10 ms inter-frame gap → sequence is broken
 
@@ -40,23 +39,31 @@ class _Buffer:
     frame_count:  int
     start_ts:     float
     last_frame_ts: float
-    first_frame:  RawFrame   # kept for fallback single-frame emit
+    first_frame:  can.Message
 
 
 class FastPacketReassembler:
     def __init__(self) -> None:
         self._buffers: dict[tuple[int, int, int], _Buffer] = {}
 
-    def feed(self, frame: RawFrame, n2k: N2KFrame | None) -> list[N2KMessage]:
+    def feed(self, msg: can.Message) -> list[N2KMessage]:
         """Process one CAN frame; return any N2KMessages that became complete."""
-        if n2k is None or len(frame.data) < 2:
+        if not msg.is_extended_id or len(msg.data) < 2:
             return []
+
+        arb      = msg.arbitration_id
+        priority = (arb >> 26) & 0x07
+        dp       = (arb >> 24) & 0x01
+        pf       = (arb >> 16) & 0xFF
+        ps       = (arb >>  8) & 0xFF
+        sa       =  arb        & 0xFF
+        pgn      = ((dp << 16) | (pf << 8) | ps) if pf >= 240 else ((dp << 16) | (pf << 8))
 
         results: list[N2KMessage] = []
 
         # Flush buffers whose last frame is more than _STALE_S seconds old
         stale = [k for k, b in self._buffers.items()
-                 if frame.timestamp - b.last_frame_ts > _STALE_S]
+                 if msg.timestamp - b.last_frame_ts > _STALE_S]
         for k in stale:
             buf = self._buffers.pop(k)
             results.append(N2KMessage(
@@ -66,38 +73,35 @@ class FastPacketReassembler:
                 frame_count=1,
             ))
 
-        frame_idx = frame.data[0] & 0x1F
-        seq       = (frame.data[0] >> 5) & 0x07
-        key       = (n2k.sa, n2k.pgn, seq)
+        frame_idx = msg.data[0] & 0x1F
+        seq       = (msg.data[0] >> 5) & 0x07
+        key       = (sa, pgn, seq)
 
         if frame_idx == 0:
-            length = frame.data[1]
+            length = msg.data[1]
             if 7 <= length <= 223:
                 self._buffers[key] = _Buffer(
-                    pgn=n2k.pgn,
-                    sa=n2k.sa,
-                    priority=n2k.priority,
-                    seq=seq,
+                    pgn=pgn, sa=sa, priority=priority, seq=seq,
                     expected_len=length,
-                    payload=bytearray(frame.data[2:8]),
+                    payload=bytearray(msg.data[2:8]),
                     frame_count=1,
-                    start_ts=frame.timestamp,
-                    last_frame_ts=frame.timestamp,
-                    first_frame=frame,
+                    start_ts=msg.timestamp,
+                    last_frame_ts=msg.timestamp,
+                    first_frame=msg,
                 )
             else:
                 results.append(N2KMessage(
-                    pgn=n2k.pgn, sa=n2k.sa, priority=n2k.priority,
-                    timestamp=frame.timestamp,
-                    payload=bytes(frame.data[:frame.dlc]),
+                    pgn=pgn, sa=sa, priority=priority,
+                    timestamp=msg.timestamp,
+                    payload=bytes(msg.data[:msg.dlc]),
                     frame_count=1,
                 ))
         else:
             buf = self._buffers.get(key)
             if buf is not None:
-                buf.payload.extend(frame.data[1:8])
+                buf.payload.extend(msg.data[1:8])
                 buf.frame_count += 1
-                buf.last_frame_ts = frame.timestamp
+                buf.last_frame_ts = msg.timestamp
                 if len(buf.payload) >= buf.expected_len:
                     self._buffers.pop(key)
                     results.append(N2KMessage(
@@ -111,9 +115,9 @@ class FastPacketReassembler:
                 # data byte happens to have non-zero low 5 bits, or an orphaned
                 # continuation after a timeout.  Emit as-is so nothing is lost.
                 results.append(N2KMessage(
-                    pgn=n2k.pgn, sa=n2k.sa, priority=n2k.priority,
-                    timestamp=frame.timestamp,
-                    payload=bytes(frame.data[:frame.dlc]),
+                    pgn=pgn, sa=sa, priority=priority,
+                    timestamp=msg.timestamp,
+                    payload=bytes(msg.data[:msg.dlc]),
                     frame_count=1,
                 ))
 

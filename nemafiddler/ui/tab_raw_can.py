@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
 )
 
 from nemafiddler.core.n2k import parse as n2k_parse, pgn_name
-from nemafiddler.core.store import DataStore, Priority
+from nemafiddler.core.store import AccumEntry, DataStore, Priority
 
 # (header label, tooltip)
 _COLS_TIME: list[tuple[str, str]] = [
@@ -59,7 +59,7 @@ _SEP_COL_ACCUM = 9
 
 _COLOR_IGNORE    = QColor(160, 160, 160)
 _COLOR_HIGHLIGHT = QColor(255, 200,  60)
-_COLOR_NON_N2K   = QColor(255, 140,  40)
+_COLOR_UNKNOWN   = QColor(255, 140,  40)
 _COLOR_ERROR_BG  = QColor(200,  40,  40)
 _COLOR_ERROR_FG  = QColor(255, 255, 255)
 _COLOR_SEP_BG    = QColor(210, 210, 210)
@@ -112,13 +112,10 @@ class TimeViewModel(QAbstractTableModel):
         n2k   = n2k_parse(frame)
 
         if role == Qt.ItemDataRole.DisplayRole:
-            if frame.is_error:
-                if col == 0:
-                    return _fmt_time(frame.timestamp)
-                if col == 1:
-                    return "ERROR"
-                if col == 7:
-                    return frame.data.rstrip(b"\x00").decode("ascii", errors="replace")
+            if frame.is_error_frame:
+                if col == 0: return _fmt_time(frame.timestamp)
+                if col == 1: return "ERROR"
+                if col == 7: return bytes(frame.data).rstrip(b"\x00").decode("ascii", errors="replace")
                 return ""
             if col == 0:  return _fmt_time(frame.timestamp)
             if col == 1:  return f"{frame.arbitration_id:08X}"
@@ -127,15 +124,15 @@ class TimeViewModel(QAbstractTableModel):
             if col == 4:  return "1" if frame.is_extended_id else "0"
             if col == 5:  return "1" if frame.is_remote_frame else "0"
             if col == 6:  return str(frame.dlc)
-            if col == 7:  return frame.data[:min(frame.dlc, 8)].hex(" ").upper()
+            if col == 7:  return bytes(frame.data[:frame.dlc]).hex(" ").upper()
             if col == 8:  return "N/A"
-            if col == 10: return f"{n2k.pgn}  {pgn_name(n2k.pgn)}" if n2k else ""
-            if col == 11: return str(n2k.sa) if n2k else ""
-            if col == 12: return str(n2k.priority) if n2k else ""
+            if col == 10: return f"{n2k[0]}  {pgn_name(n2k[0])}" if n2k else ""
+            if col == 11: return str(n2k[1]) if n2k else ""
+            if col == 12: return str(n2k[2]) if n2k else ""
             if col == 13: return str((frame.data[0] >> 5) & 0x07) if (n2k and len(frame.data) > 0) else "—"
             if col == 14: return str(frame.data[0] & 0x1F)        if (n2k and len(frame.data) > 0) else "—"
 
-        if frame.is_error:
+        if frame.is_error_frame:
             if role == Qt.ItemDataRole.BackgroundRole:
                 return _COLOR_ERROR_BG
             if role == Qt.ItemDataRole.ForegroundRole:
@@ -150,13 +147,13 @@ class TimeViewModel(QAbstractTableModel):
         if role == Qt.ItemDataRole.BackgroundRole:
             flag = self._flag_for(frame, n2k)
             if flag == "highlight": return _COLOR_HIGHLIGHT
-            if n2k is None:         return _COLOR_NON_N2K
+            if flag == "unknown":   return _COLOR_UNKNOWN
 
         return None
 
     def _flag_for(self, frame, n2k) -> Priority:
         if n2k is not None:
-            f = self._store.get_flag_by_pgn(n2k.pgn)
+            f = self._store.get_flag_by_pgn(n2k[0])
             if f:
                 return f
         return self._store.get_flag_by_arb(frame.arbitration_id)
@@ -208,7 +205,8 @@ class AccumViewModel(QAbstractTableModel):
         if index.row() >= len(keys):
             return None
         entry = d[keys[index.row()]]
-        n2k   = entry.last_n2k
+        f     = entry.last_frame
+        n2k   = n2k_parse(f)
         col   = index.column()
 
         if col == _SEP_COL_ACCUM:
@@ -217,7 +215,6 @@ class AccumViewModel(QAbstractTableModel):
             return None
 
         if role == Qt.ItemDataRole.DisplayRole:
-            f = entry.last_frame
             if col == 0:  return _fmt_time(f.timestamp)
             if col == 1:  return f"{f.arbitration_id:08X}"
             if col == 2:  return "Ext" if f.is_extended_id else "Std"
@@ -225,11 +222,11 @@ class AccumViewModel(QAbstractTableModel):
             if col == 4:  return "1" if f.is_extended_id else "0"
             if col == 5:  return "1" if f.is_remote_frame else "0"
             if col == 6:  return str(f.dlc)
-            if col == 7:  return f.data[:min(f.dlc, 8)].hex(" ").upper()
+            if col == 7:  return bytes(f.data[:f.dlc]).hex(" ").upper()
             if col == 8:  return "N/A"
-            if col == 10: return f"{n2k.pgn}  {pgn_name(n2k.pgn)}" if n2k else ""
-            if col == 11: return str(n2k.sa) if n2k else ""
-            if col == 12: return str(n2k.priority) if n2k else ""
+            if col == 10: return f"{n2k[0]}  {pgn_name(n2k[0])}" if n2k else ""
+            if col == 11: return str(n2k[1]) if n2k else ""
+            if col == 12: return str(n2k[2]) if n2k else ""
             if col == 13: return str((f.data[0] >> 5) & 0x07) if (n2k and len(f.data) > 0) else "—"
             if col == 14: return str(f.data[0] & 0x1F)        if (n2k and len(f.data) > 0) else "—"
             if col == 15: return str(entry.count)
@@ -238,22 +235,22 @@ class AccumViewModel(QAbstractTableModel):
                 return f"{ms:.0f} ms" if ms is not None else "—"
 
         if role == Qt.ItemDataRole.ForegroundRole:
-            flag = self._flag_for(entry, n2k)
+            flag = self._flag_for(f, n2k)
             if flag == "ignore": return _COLOR_IGNORE
 
         if role == Qt.ItemDataRole.BackgroundRole:
-            flag = self._flag_for(entry, n2k)
+            flag = self._flag_for(f, n2k)
             if flag == "highlight": return _COLOR_HIGHLIGHT
-            if n2k is None:         return _COLOR_NON_N2K
+            if flag == "unknown":   return _COLOR_UNKNOWN
 
         return None
 
-    def _flag_for(self, entry, n2k) -> Priority:
+    def _flag_for(self, frame, n2k) -> Priority:
         if n2k is not None:
-            f = self._store.get_flag_by_pgn(n2k.pgn)
+            f = self._store.get_flag_by_pgn(n2k[0])
             if f:
                 return f
-        return self._store.get_flag_by_arb(entry.last_frame.arbitration_id)
+        return self._store.get_flag_by_arb(frame.arbitration_id)
 
     def refresh(self) -> None:
         self.layoutChanged.emit()

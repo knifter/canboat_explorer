@@ -1,11 +1,14 @@
 """
 Fixed-size binary session log.
 
-Record layout (21 bytes per frame):
+Record layout (22 bytes per frame):
   [0:8]   timestamp  — float64, seconds since epoch (big-endian)
   [8:12]  arb_id     — uint32 (big-endian)
   [12]    dlc        — uint8
   [13:21] data       — 8 bytes (zero-padded)
+  [21]    flags      — uint8  bit 0: is_error_frame
+                              bit 1: is_remote_frame
+                              bit 2: is_fd
 """
 from __future__ import annotations
 
@@ -14,26 +17,35 @@ import time
 from pathlib import Path
 from typing import Iterator
 
-from nemafiddler.bus.can_reader import RawFrame
+import can
 
-RECORD_SIZE = 21
-_PACK = struct.Struct(">dIB8s")   # float64, uint32, uint8, 8s  → 21 bytes
+RECORD_SIZE = 22
+_PACK = struct.Struct(">dIB8sB")  # float64, uint32, uint8, 8s, uint8  → 22 bytes
+
+_FLAG_ERROR  = 0x01
+_FLAG_REMOTE = 0x02
+_FLAG_FD     = 0x04
 
 
-def encode(frame: RawFrame) -> bytes:
-    return _PACK.pack(frame.timestamp, frame.arbitration_id, frame.dlc, frame.data)
+def encode(msg: can.Message) -> bytes:
+    flags = ((_FLAG_ERROR  if msg.is_error_frame  else 0) |
+             (_FLAG_REMOTE if msg.is_remote_frame else 0) |
+             (_FLAG_FD     if msg.is_fd           else 0))
+    data  = bytes(msg.data)[:8].ljust(8, b"\x00")
+    return _PACK.pack(msg.timestamp, msg.arbitration_id, msg.dlc, data, flags)
 
 
-def decode(raw: bytes) -> RawFrame:
-    ts, arb_id, dlc, data = _PACK.unpack(raw)
-    is_error = dlc == 0xFF
-    return RawFrame(
+def decode(raw: bytes) -> can.Message:
+    ts, arb_id, dlc, data, flags = _PACK.unpack(raw)
+    return can.Message(
         timestamp=ts,
         arbitration_id=arb_id,
         dlc=dlc,
-        data=data,
-        is_extended_id=(not is_error) and (arb_id > 0x7FF),
-        is_error=is_error,
+        data=data[:dlc],
+        is_extended_id=arb_id > 0x7FF,
+        is_error_frame=bool(flags & _FLAG_ERROR),
+        is_remote_frame=bool(flags & _FLAG_REMOTE),
+        is_fd=bool(flags & _FLAG_FD),
     )
 
 
@@ -62,10 +74,10 @@ class SessionLog:
     # Write side (live mode only)
     # ------------------------------------------------------------------
 
-    def append(self, frame: RawFrame) -> None:
+    def append(self, msg: can.Message) -> None:
         if self._fh is None:
             return
-        self._fh.write(encode(frame))
+        self._fh.write(encode(msg))
         self._fh.flush()        # crash-safe: each frame on disk before UI
 
     def close(self) -> None:
@@ -77,9 +89,9 @@ class SessionLog:
     # Read side
     # ------------------------------------------------------------------
 
-    def load(self) -> list[RawFrame]:
+    def load(self) -> list[can.Message]:
         """Read all records from disk into memory."""
-        frames: list[RawFrame] = []
+        frames: list[can.Message] = []
         if not self.path.exists():
             return frames
         data = self.path.read_bytes()
@@ -92,7 +104,7 @@ class SessionLog:
                 break   # truncated record at end (e.g. from a crash) — stop here
         return frames
 
-    def iter_records(self) -> Iterator[RawFrame]:
+    def iter_records(self) -> Iterator[can.Message]:
         """Iterate records without loading all into memory (for large files)."""
         if not self.path.exists():
             return

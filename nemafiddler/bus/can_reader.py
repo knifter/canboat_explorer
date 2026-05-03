@@ -8,22 +8,10 @@ import logging
 import queue
 import threading
 import time
-from dataclasses import dataclass
 
 import can
 
 log = logging.getLogger(__name__)
-
-
-@dataclass(slots=True)
-class RawFrame:
-    timestamp: float       # seconds since epoch (time.time())
-    arbitration_id: int
-    dlc: int               # 0xFF = error/malformed marker
-    data: bytes            # always 8 bytes (zero-padded); error text for error frames
-    is_extended_id: bool = True
-    is_remote_frame: bool = False
-    is_error: bool = False # True for frames the adapter sent but we couldn't parse
 
 
 class CanReader(threading.Thread):
@@ -38,7 +26,7 @@ class CanReader(threading.Thread):
         self,
         interface: str,
         channel: str | int,
-        frame_queue: queue.Queue[RawFrame],
+        frame_queue: queue.Queue[can.Message],
         serial_baud: int = 2_000_000,
         can_baud: int = 250_000,
     ) -> None:
@@ -93,17 +81,8 @@ class CanReader(threading.Thread):
                     msg = bus.recv(timeout=0.1)
                 except Exception as exc:
                     log.warning("recv error: %s", exc)
-                    # Push a placeholder so the UI and log see it — DLC=0xFF is the marker
-                    err_text = str(exc)[:8].encode("ascii", errors="replace").ljust(8, b"\x00")
-                    self.frame_queue.put(RawFrame(
-                        timestamp=time.time(),
-                        arbitration_id=0,
-                        dlc=0xFF,
-                        data=err_text,
-                        is_extended_id=False,
-                        is_error=True,
-                    ))
-                    continue
+                    self.error = str(exc)
+                    break
 
                 if msg is None:
                     continue
@@ -113,16 +92,11 @@ class CanReader(threading.Thread):
                     log.error("impossible DLC %d from adapter", dlc)
                 elif dlc > 8:
                     log.warning("DLC %d on classic CAN frame (9-15 = 8 data bytes)", dlc)
-                data = bytes(msg.data)[:8].ljust(8, b"\x00")
-                frame = RawFrame(
-                    timestamp=time.time(),
-                    arbitration_id=msg.arbitration_id,
-                    dlc=dlc,
-                    data=data,
-                    is_extended_id=msg.is_extended_id,
-                    is_remote_frame=bool(msg.is_remote_frame),
-                )
-                self.frame_queue.put(frame)
+
+                if not msg.timestamp:
+                    msg.timestamp = time.time()
+
+                self.frame_queue.put(msg)
         finally:
             bus.shutdown()
 

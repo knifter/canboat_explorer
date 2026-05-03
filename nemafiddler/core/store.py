@@ -7,24 +7,24 @@ so no locking is needed for reads that also happen on the UI thread.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from nemafiddler.bus.can_reader import RawFrame
+import can
+from nmea2000.decoder import NMEA2000Decoder
+
 from nemafiddler.core.fast_packet import FastPacketReassembler, N2KMessage
-from nemafiddler.core.n2k import N2KFrame, parse as n2k_parse
 from nemafiddler.core.session_log import SessionLog
 
-Priority = Literal["ignore", "highlight"] | None
+Priority = Literal["ignore", "highlight", "unknown"] | None
 
 
 @dataclass
 class AccumEntry:
-    last_frame: RawFrame
+    last_frame: can.Message
     count: int
-    last_n2k: N2KFrame | None = None
-    first_ts: float = 0.0   # timestamp of the first frame seen for this key
+    first_ts: float = 0.0
 
     def __post_init__(self) -> None:
         if self.first_ts == 0.0:
@@ -45,12 +45,15 @@ class DataStore:
         self.log = log
         self.sidecar_path = sidecar_path
 
-        self.frames: list[RawFrame] = []
+        self.frames: list[can.Message] = []
         self.by_arb_id: dict[int, AccumEntry] = {}
         self.by_pgn_sa: dict[tuple[int, int], AccumEntry] = {}
         self.by_pgn: dict[int, AccumEntry] = {}
         self.n2k_messages: list[N2KMessage] = []
         self._fp = FastPacketReassembler()
+        self._n2k_decoder = NMEA2000Decoder()
+        self._unknown_pgns: set[int] = set()
+        self._unknown_arbs: set[int] = set()
 
         # JSON-serialisable flag dict; keys are "a:<arb_id>" or "p:<pgn>"
         self._flags: dict[str, str] = {}
@@ -60,60 +63,89 @@ class DataStore:
     # Ingestion
     # ------------------------------------------------------------------
 
-    def ingest(self, frame: RawFrame) -> None:
+    def ingest(self, msg: can.Message) -> None:
         """Append one frame from live capture: write to log + update memory."""
-        self.log.append(frame)
-        self._add(frame)
+        self.log.append(msg)
+        self._add(msg)
 
-    def bulk_load(self, frames: list[RawFrame]) -> None:
+    def bulk_load(self, frames: list[can.Message]) -> None:
         """Load existing frames at startup without writing to the log."""
         for f in frames:
             self._add(f)
 
-    def _add(self, frame: RawFrame) -> None:
-        self.frames.append(frame)
+    def _add(self, msg: can.Message) -> None:
+        self.frames.append(msg)
 
-        if frame.is_error:
+        if msg.is_error_frame:
             return   # error frames are stored in time list only
 
-        n2k = n2k_parse(frame)
-        self.n2k_messages.extend(self._fp.feed(frame, n2k))
-
-        entry = self.by_arb_id.get(frame.arbitration_id)
-        if entry is None:
-            self.by_arb_id[frame.arbitration_id] = AccumEntry(frame, 1, n2k)
+        if msg.is_extended_id:
+            arb      = msg.arbitration_id
+            priority = (arb >> 26) & 0x07
+            dp       = (arb >> 24) & 0x01
+            pf       = (arb >> 16) & 0xFF
+            ps       = (arb >>  8) & 0xFF
+            sa       =  arb        & 0xFF
+            pgn      = ((dp << 16) | (pf << 8) | ps) if pf >= 240 else ((dp << 16) | (pf << 8))
+            is_n2k   = True
         else:
-            entry.last_frame = frame
-            entry.last_n2k   = n2k
+            pgn = sa = priority = 0
+            is_n2k = False
+
+        self.n2k_messages.extend(self._fp.feed(msg))
+
+        if is_n2k:
+            decoded = self._n2k_decoder.decode(msg)
+            if decoded is None:
+                if pgn not in self._unknown_pgns:
+                    self._unknown_pgns.add(pgn)
+            else:
+                self._unknown_pgns.discard(pgn)
+        elif msg.arbitration_id not in self._unknown_arbs:
+            self._unknown_arbs.add(msg.arbitration_id)
+
+        entry = self.by_arb_id.get(msg.arbitration_id)
+        if entry is None:
+            self.by_arb_id[msg.arbitration_id] = AccumEntry(msg, 1)
+        else:
+            entry.last_frame = msg
             entry.count += 1
 
-        if n2k is not None:
-            key = (n2k.pgn, n2k.sa)
+        if is_n2k:
+            key = (pgn, sa)
             entry = self.by_pgn_sa.get(key)
             if entry is None:
-                self.by_pgn_sa[key] = AccumEntry(frame, 1, n2k)
+                self.by_pgn_sa[key] = AccumEntry(msg, 1)
             else:
-                entry.last_frame = frame
+                entry.last_frame = msg
                 entry.count += 1
-                entry.last_n2k = n2k
 
-            entry = self.by_pgn.get(n2k.pgn)
+            entry = self.by_pgn.get(pgn)
             if entry is None:
-                self.by_pgn[n2k.pgn] = AccumEntry(frame, 1, n2k)
+                self.by_pgn[pgn] = AccumEntry(msg, 1)
             else:
-                entry.last_frame = frame
+                entry.last_frame = msg
                 entry.count += 1
-                entry.last_n2k = n2k
 
     # ------------------------------------------------------------------
     # Flag / highlight state
     # ------------------------------------------------------------------
 
     def get_flag_by_arb(self, arb_id: int) -> Priority:
-        return self._flags.get(f"a:{arb_id}")  # type: ignore[return-value]
+        user = self._flags.get(f"a:{arb_id}")
+        if user:
+            return user  # type: ignore[return-value]
+        if arb_id in self._unknown_arbs:
+            return "unknown"
+        return None
 
     def get_flag_by_pgn(self, pgn: int) -> Priority:
-        return self._flags.get(f"p:{pgn}")  # type: ignore[return-value]
+        user = self._flags.get(f"p:{pgn}")
+        if user:
+            return user  # type: ignore[return-value]
+        if pgn in self._unknown_pgns:
+            return "unknown"
+        return None
 
     def set_flag_by_arb(self, arb_id: int, value: Priority) -> None:
         self._set(f"a:{arb_id}", value)
@@ -156,6 +188,9 @@ class DataStore:
         self.by_pgn.clear()
         self.n2k_messages.clear()
         self._fp = FastPacketReassembler()
+        self._n2k_decoder = NMEA2000Decoder()
+        self._unknown_pgns.clear()
+        self._unknown_arbs.clear()
 
     def clear(self) -> None:
         """Archive the current log, reset in-memory state, start fresh."""
