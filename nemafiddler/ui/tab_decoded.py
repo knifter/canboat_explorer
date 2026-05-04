@@ -4,7 +4,7 @@ import time
 from collections import deque
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QBrush, QColor, QFont
 from PyQt6.QtWidgets import (
     QAbstractItemView, QHeaderView, QLabel, QSplitter,
     QTableWidget, QTableWidgetItem, QTreeWidget, QTreeWidgetItem,
@@ -21,6 +21,11 @@ _SKIP_TYPES  = {FieldTypes.RESERVED, FieldTypes.SPARE}
 _ROLE_KEY        = Qt.ItemDataRole.UserRole
 _ROLE_HISTORICAL = Qt.ItemDataRole.UserRole + 1
 _ROLE_MSG        = Qt.ItemDataRole.UserRole + 2
+_ROLE_TYPE       = Qt.ItemDataRole.UserRole + 3   # "pgn" | "sa" | "leaf"
+_ROLE_PGN        = Qt.ItemDataRole.UserRole + 4
+_ROLE_SA_KEY     = Qt.ItemDataRole.UserRole + 5   # (pgn, sa)
+
+_SECTION_BG = QColor("#747474")
 
 
 def _fmt_time(ts) -> str:
@@ -58,10 +63,10 @@ class DecodedTab(QWidget):
     def __init__(self, store: DataStore) -> None:
         super().__init__()
         self._store            = store
-        self._pgn_items:  dict[int,   QTreeWidgetItem] = {}
-        self._leaf_items: dict[tuple, QTreeWidgetItem] = {}
-        self._selected_key:        tuple | None = None
-        self._selected_historical: bool         = False
+        self._pgn_items:  dict[int,         QTreeWidgetItem] = {}
+        self._sa_items:   dict[tuple,       QTreeWidgetItem] = {}
+        self._leaf_items: dict[tuple,       QTreeWidgetItem] = {}
+        self._selected_item: QTreeWidgetItem | None = None
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
@@ -111,23 +116,20 @@ class DecodedTab(QWidget):
             if not dq:
                 continue
             if key not in self._leaf_items:
-                self._create_leaf(key, dq[0])
+                self._create_entry(key, dq[0])
             leaf = self._leaf_items[key]
             leaf.setText(1, _rate_label(dq))
             if leaf.isExpanded():
                 self._rebuild_history(leaf, dq)
-
-        if self._selected_key is not None and not self._selected_historical:
-            dq = self._store.decoded_by_key.get(self._selected_key)
-            if dq:
-                self._show_message(dq[0], historical=False)
+        self._refresh_selection()
 
     def reset(self) -> None:
         self._tree.clear()
         self._pgn_items.clear()
+        self._sa_items.clear()
         self._leaf_items.clear()
-        self._selected_key        = None
-        self._selected_historical = False
+        self._selected_item = None
+        self._table.clearSpans()
         self._table.setRowCount(0)
         self._hdr_label.setText("")
 
@@ -135,28 +137,54 @@ class DecodedTab(QWidget):
     # Tree management
     # ------------------------------------------------------------------
 
-    def _create_leaf(self, key: tuple, decoded_msg) -> None:
-        pgn, sa, _ = key
+    def _create_entry(self, key: tuple, decoded_msg) -> None:
+        pgn, sa, qualifier_tuple = key
 
+        # Level 1: PGN group
         pgn_item = self._pgn_items.get(pgn)
         if pgn_item is None:
             pgn_item = QTreeWidgetItem([decoded_msg.description or f"PGN {pgn}", ""])
             bold = QFont()
             bold.setBold(True)
             pgn_item.setFont(0, bold)
-            pgn_item.setFlags(pgn_item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+            pgn_item.setData(0, _ROLE_TYPE, "pgn")
+            pgn_item.setData(0, _ROLE_PGN,  pgn)
             self._tree.addTopLevelItem(pgn_item)
             self._pgn_items[pgn] = pgn_item
 
-        qualifier = _qualifier_label(decoded_msg)
-        label     = f"SA:{sa}  {qualifier}" if qualifier else f"SA:{sa}"
-        leaf = QTreeWidgetItem([label, ""])
-        leaf.setData(0, _ROLE_KEY,        key)
-        leaf.setData(0, _ROLE_HISTORICAL, False)
-        leaf.addChild(QTreeWidgetItem(["…", ""]))   # placeholder so arrow appears
-        pgn_item.addChild(leaf)
-        pgn_item.setExpanded(True)
-        self._leaf_items[key] = leaf
+        if not qualifier_tuple:
+            # No qualifier — SA node is the leaf
+            leaf = QTreeWidgetItem([f"SA:{sa}", ""])
+            leaf.setData(0, _ROLE_TYPE,       "leaf")
+            leaf.setData(0, _ROLE_KEY,        key)
+            leaf.setData(0, _ROLE_HISTORICAL, False)
+            leaf.addChild(QTreeWidgetItem(["…", ""]))
+            pgn_item.addChild(leaf)
+            pgn_item.setExpanded(True)
+            self._leaf_items[key] = leaf
+        else:
+            # Level 2: SA intermediate node
+            sa_key   = (pgn, sa)
+            sa_item  = self._sa_items.get(sa_key)
+            if sa_item is None:
+                sa_item = QTreeWidgetItem([f"SA:{sa}", ""])
+                sa_item.setData(0, _ROLE_TYPE,   "sa")
+                sa_item.setData(0, _ROLE_PGN,    pgn)
+                sa_item.setData(0, _ROLE_SA_KEY, sa_key)
+                pgn_item.addChild(sa_item)
+                pgn_item.setExpanded(True)
+                self._sa_items[sa_key] = sa_item
+
+            # Level 3: qualifier leaf
+            qualifier = _qualifier_label(decoded_msg) or str(qualifier_tuple)
+            leaf = QTreeWidgetItem([qualifier, ""])
+            leaf.setData(0, _ROLE_TYPE,       "leaf")
+            leaf.setData(0, _ROLE_KEY,        key)
+            leaf.setData(0, _ROLE_HISTORICAL, False)
+            leaf.addChild(QTreeWidgetItem(["…", ""]))
+            sa_item.addChild(leaf)
+            sa_item.setExpanded(True)
+            self._leaf_items[key] = leaf
 
     def _rebuild_history(self, leaf: QTreeWidgetItem, dq: deque) -> None:
         leaf.takeChildren()
@@ -172,10 +200,10 @@ class DecodedTab(QWidget):
             leaf.addChild(child)
 
     def _on_item_expanded(self, item: QTreeWidgetItem) -> None:
-        key = item.data(0, _ROLE_KEY)
-        if key is None:
+        if item.data(0, _ROLE_TYPE) != "leaf":
             return
-        dq = self._store.decoded_by_key.get(key)
+        key = item.data(0, _ROLE_KEY)
+        dq  = self._store.decoded_by_key.get(key)
         if dq:
             self._rebuild_history(item, dq)
 
@@ -188,42 +216,99 @@ class DecodedTab(QWidget):
         if not items:
             return
         item       = items[0]
-        key        = item.data(0, _ROLE_KEY)
+        node_type  = item.data(0, _ROLE_TYPE)
         historical = item.data(0, _ROLE_HISTORICAL)
-        if key is None or historical is None:
-            return
+
         if historical:
             msg = item.data(0, _ROLE_MSG)
             if msg is not None:
-                self._selected_key        = key
-                self._selected_historical = True
-                self._show_message(msg, historical=True)
-        else:
-            self._selected_key        = key
-            self._selected_historical = False
-            dq = self._store.decoded_by_key.get(key)
+                base  = self._leaf_breadcrumb(item.parent(), msg)
+                try:
+                    ts_str = _fmt_time(msg.timestamp)
+                except Exception:
+                    ts_str = "snapshot"
+                self._selected_item = item
+                self._show_message(msg, title=f"{base}  —  {ts_str}")
+
+        elif node_type in ("pgn", "sa"):
+            msgs = self._collect_latest_msgs_under(item)
+            if msgs:
+                self._selected_item = item
+                self._show_stacked(self._stacked_title(item, msgs[0]), msgs)
+
+        elif node_type == "leaf":
+            key = item.data(0, _ROLE_KEY)
+            dq  = self._store.decoded_by_key.get(key)
             if dq:
-                self._show_message(dq[0], historical=False)
+                self._selected_item = item
+                self._show_message(dq[0], title=self._leaf_breadcrumb(item, dq[0]))
+
+    def _leaf_breadcrumb(self, leaf: QTreeWidgetItem | None, decoded_msg) -> str:
+        if leaf is None:
+            return decoded_msg.description or f"PGN {decoded_msg.PGN}"
+        parent = leaf.parent()
+        parent_type = parent.data(0, _ROLE_TYPE) if parent else None
+        pgn  = (parent or leaf).data(0, _ROLE_PGN) or decoded_msg.PGN
+        desc = decoded_msg.description or f"PGN {pgn}"
+        base = f"{desc}  (PGN {pgn})"
+        if parent_type == "sa":
+            sa        = parent.data(0, _ROLE_SA_KEY)[1]
+            qualifier = _qualifier_label(decoded_msg) or leaf.text(0)
+            return f"{base}  —  SA:{sa}  —  {qualifier}"
+        if parent_type == "pgn":
+            sa = leaf.data(0, _ROLE_KEY)[1]
+            return f"{base}  —  SA:{sa}"
+        return base
+
+    def _stacked_title(self, item: QTreeWidgetItem, sample_msg) -> str:
+        node_type = item.data(0, _ROLE_TYPE)
+        pgn  = item.data(0, _ROLE_PGN)
+        desc = sample_msg.description or f"PGN {pgn}"
+        base = f"{desc}  (PGN {pgn})"
+        if node_type == "sa":
+            sa = item.data(0, _ROLE_SA_KEY)[1]
+            return f"{base}  —  SA:{sa}"
+        return base
+
+    def _collect_latest_msgs_under(self, item: QTreeWidgetItem) -> list:
+        msgs = []
+        for i in range(item.childCount()):
+            child      = item.child(i)
+            child_type = child.data(0, _ROLE_TYPE)
+            if child_type == "leaf":
+                key = child.data(0, _ROLE_KEY)
+                dq  = self._store.decoded_by_key.get(key)
+                if dq:
+                    msgs.append(dq[0])
+            elif child_type == "sa":
+                msgs.extend(self._collect_latest_msgs_under(child))
+        return msgs
+
+    def _refresh_selection(self) -> None:
+        item = self._selected_item
+        if item is None:
+            return
+        node_type  = item.data(0, _ROLE_TYPE)
+        historical = item.data(0, _ROLE_HISTORICAL)
+        if node_type in ("pgn", "sa"):
+            msgs = self._collect_latest_msgs_under(item)
+            if msgs:
+                self._show_stacked(self._stacked_title(item, msgs[0]), msgs)
+        elif node_type == "leaf" and not historical:
+            key = item.data(0, _ROLE_KEY)
+            dq  = self._store.decoded_by_key.get(key)
+            if dq:
+                self._show_message(dq[0], title=self._leaf_breadcrumb(item, dq[0]))
 
     # ------------------------------------------------------------------
     # Right-panel field table
     # ------------------------------------------------------------------
 
-    def _show_message(self, decoded_msg, historical: bool) -> None:
+    def _show_message(self, decoded_msg, title: str = "") -> None:
+        self._table.clearSpans()
         decoded_msg.apply_preferred_units({})
-
-        desc = decoded_msg.description or f"PGN {decoded_msg.PGN}"
-        if historical:
-            try:
-                ts_str = _fmt_time(decoded_msg.timestamp)
-            except Exception:
-                ts_str = "snapshot"
-            self._hdr_label.setText(f"{desc}  —  snapshot {ts_str}")
-            self._hdr_label.setStyleSheet(
-                "font-weight: bold; padding: 2px; background: #ffffc8;")
-        else:
-            self._hdr_label.setText(desc)
-            self._hdr_label.setStyleSheet("font-weight: bold; padding: 2px;")
+        self._hdr_label.setText(title)
+        self._hdr_label.setStyleSheet("font-weight: bold; padding: 2px;")
 
         fields = [f for f in decoded_msg.fields if f.type not in _SKIP_TYPES]
         self._table.setRowCount(len(fields))
@@ -255,3 +340,57 @@ class DecodedTab(QWidget):
             self._table.setItem(row, 0, name_item)
             self._table.setItem(row, 1, val_item)
             self._table.setItem(row, 2, unit_item)
+
+    def _show_stacked(self, title: str, msgs: list) -> None:
+        self._table.clearSpans()
+        self._hdr_label.setText(title)
+        self._hdr_label.setStyleSheet("font-weight: bold; padding: 2px;")
+
+        # Build row list: (is_section, section_label, field)
+        rows: list[tuple] = []
+        for msg in msgs:
+            msg.apply_preferred_units({})
+            section = _qualifier_label(msg) or f"SA:{msg.source}"
+            rows.append((True, section, None))
+            for field in msg.fields:
+                if field.type not in _SKIP_TYPES:
+                    rows.append((False, None, field))
+
+        self._table.setRowCount(len(rows))
+        section_font = QFont()
+        section_font.setBold(True)
+        italic = QFont()
+        italic.setItalic(True)
+
+        for row_idx, (is_section, label, field) in enumerate(rows):
+            if is_section:
+                hdr = QTableWidgetItem(label)
+                hdr.setFont(section_font)
+                hdr.setBackground(QBrush(_SECTION_BG))
+                self._table.setItem(row_idx, 0, hdr)
+                self._table.setItem(row_idx, 1, QTableWidgetItem(""))
+                self._table.setItem(row_idx, 2, QTableWidgetItem(""))
+                self._table.setSpan(row_idx, 0, 1, 3)
+            else:
+                val = field.value
+                if isinstance(val, list):
+                    val_str = ", ".join(str(v) for v in val)
+                elif val is None:
+                    val_str = "—"
+                else:
+                    val_str = str(val)
+
+                name_item = QTableWidgetItem(field.name or "")
+                val_item  = QTableWidgetItem(val_str)
+                unit_item = QTableWidgetItem(field.unit_of_measurement or "")
+
+                if field.description:
+                    name_item.setToolTip(field.description)
+                if field.part_of_primary_key:
+                    name_item.setFont(italic)
+                    val_item.setFont(italic)
+                    unit_item.setFont(italic)
+
+                self._table.setItem(row_idx, 0, name_item)
+                self._table.setItem(row_idx, 1, val_item)
+                self._table.setItem(row_idx, 2, unit_item)
