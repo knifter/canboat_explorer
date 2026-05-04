@@ -51,10 +51,11 @@ class DataStore:
         self.by_pgn_sa: dict[tuple[int, int], AccumEntry] = {}
         self.by_pgn: dict[int, AccumEntry] = {}
         self.n2k_messages: list[N2KMessage] = []
-        self.decoded_by_key: dict[tuple[int, int, str | None], deque] = {}
+        self.decoded_by_key: dict[tuple[int, int, tuple], deque] = {}
         self._fp = FastPacketReassembler()
         self._n2k_decoder = NMEA2000Decoder()
         self._unknown_pgns: set[int] = set()
+        self._known_pgns:   set[int] = set()
         self._unknown_arbs: set[int] = set()
 
         # JSON-serialisable flag dict; keys are "a:<arb_id>" or "p:<pgn>"
@@ -103,7 +104,13 @@ class DataStore:
                     self._unknown_pgns.add(pgn)
             else:
                 self._unknown_pgns.discard(pgn)
-                key = (decoded.PGN, decoded.source, decoded.hash)
+                self._known_pgns.add(pgn)
+                qualifier = tuple(sorted(
+                    (f.id, f.raw_value)
+                    for f in decoded.fields
+                    if f.part_of_primary_key
+                ))
+                key = (decoded.PGN, decoded.source, qualifier)
                 if key not in self.decoded_by_key:
                     self.decoded_by_key[key] = deque(maxlen=200)
                 self.decoded_by_key[key].appendleft(decoded)
@@ -149,7 +156,7 @@ class DataStore:
         user = self._flags.get(f"p:{pgn}")
         if user:
             return user  # type: ignore[return-value]
-        if pgn in self._unknown_pgns:
+        if pgn in self._unknown_pgns and pgn not in self._known_pgns:
             return "unknown"
         return None
 
@@ -197,6 +204,7 @@ class DataStore:
         self._fp = FastPacketReassembler()
         self._n2k_decoder = NMEA2000Decoder()
         self._unknown_pgns.clear()
+        self._known_pgns.clear()
         self._unknown_arbs.clear()
 
     def clear(self) -> None:
