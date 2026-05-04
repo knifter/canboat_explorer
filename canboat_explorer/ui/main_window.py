@@ -46,6 +46,7 @@ class MainWindow(QMainWindow):
         self._update_title()
         self._tab_raw.on_frames_added()
         self._tab_n2k.on_messages_added()
+        self._tab_network.on_messages_added()
         self._tab_decoded.on_messages_added()
 
     # ------------------------------------------------------------------
@@ -143,10 +144,11 @@ class MainWindow(QMainWindow):
         self._tabs = QTabWidget()
         self._tab_raw     = RawCanTab(self._store)
         self._tab_n2k     = N2KTab(self._store)
+        self._tab_network = NetworkTab(self._store)
         self._tab_decoded = DecodedTab(self._store)
         self._tabs.addTab(self._tab_raw,     "Raw CAN")
         self._tabs.addTab(self._tab_n2k,     "NMEA 2000")
-        self._tabs.addTab(QLabel("[Network — not yet implemented]"), "Network")
+        self._tabs.addTab(self._tab_network, "Network")
         self._tabs.addTab(self._tab_decoded, "Decoded Values")
         self.setCentralWidget(self._tabs)
 
@@ -188,6 +190,7 @@ class MainWindow(QMainWindow):
             self._store.ingest(frame)
         self._tab_raw.on_frames_added()
         self._tab_n2k.on_messages_added()
+        self._tab_network.on_messages_added()
         self._tab_decoded.on_messages_added()
 
     # ------------------------------------------------------------------
@@ -208,6 +211,8 @@ class MainWindow(QMainWindow):
         self._store.bulk_load(frames)
         self._tab_raw.on_frames_added()
         self._tab_n2k.reset()
+        self._tab_network.reset()
+        self._tab_network.on_messages_added()
         self._tab_decoded.reset()
         self._tab_decoded.on_messages_added()
 
@@ -236,6 +241,7 @@ class MainWindow(QMainWindow):
         self._store.reset_memory()
         self._tab_raw.on_frames_added()
         self._tab_n2k.reset()
+        self._tab_network.reset()
         self._tab_decoded.reset()
 
     def _action_settings(self) -> None:
