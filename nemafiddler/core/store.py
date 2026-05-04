@@ -7,6 +7,7 @@ so no locking is needed for reads that also happen on the UI thread.
 from __future__ import annotations
 
 import json
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -50,6 +51,7 @@ class DataStore:
         self.by_pgn_sa: dict[tuple[int, int], AccumEntry] = {}
         self.by_pgn: dict[int, AccumEntry] = {}
         self.n2k_messages: list[N2KMessage] = []
+        self.decoded_by_key: dict[tuple[int, int, str | None], deque] = {}
         self._fp = FastPacketReassembler()
         self._n2k_decoder = NMEA2000Decoder()
         self._unknown_pgns: set[int] = set()
@@ -101,6 +103,10 @@ class DataStore:
                     self._unknown_pgns.add(pgn)
             else:
                 self._unknown_pgns.discard(pgn)
+                key = (decoded.PGN, decoded.source, decoded.hash)
+                if key not in self.decoded_by_key:
+                    self.decoded_by_key[key] = deque(maxlen=200)
+                self.decoded_by_key[key].appendleft(decoded)
         elif msg.arbitration_id not in self._unknown_arbs:
             self._unknown_arbs.add(msg.arbitration_id)
 
@@ -187,6 +193,7 @@ class DataStore:
         self.by_pgn_sa.clear()
         self.by_pgn.clear()
         self.n2k_messages.clear()
+        self.decoded_by_key.clear()
         self._fp = FastPacketReassembler()
         self._n2k_decoder = NMEA2000Decoder()
         self._unknown_pgns.clear()
