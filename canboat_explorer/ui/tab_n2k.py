@@ -9,9 +9,9 @@ from PyQt6.QtWidgets import (
     QHeaderView,
 )
 
-from nemafiddler.core.fast_packet import N2KMessage
-from nemafiddler.core.n2k import pgn_name
-from nemafiddler.core.store import DataStore
+from canboat_explorer.core.fast_packet import N2KMessage
+from canboat_explorer.core.n2k import pgn_name
+from canboat_explorer.core.store import DataStore
 
 _COLS_TIME: list[tuple[str, str]] = [
     ("Time",         "Timestamp of the first CAN frame of this message."),

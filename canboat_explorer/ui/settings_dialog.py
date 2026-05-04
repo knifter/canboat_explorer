@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout, QPushButton, QVBoxLayout,
 )
 
-from nemafiddler.core.settings import settings
+from canboat_explorer.core.settings import settings
 
 _INTERFACES = ["waveshare", "slcan", "gs_usb", "pcan", "socketcan"]
 

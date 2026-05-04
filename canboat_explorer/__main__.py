@@ -1,6 +1,6 @@
 import sys
 from PyQt6.QtWidgets import QApplication
-from nemafiddler.ui.main_window import MainWindow
+from canboat_explorer.ui.main_window import MainWindow
 
 
 def main() -> None:

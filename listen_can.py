@@ -18,14 +18,14 @@ from __future__ import annotations
 import sys
 import time
 
-from nemafiddler.core.n2k import pgn_from_id, pgn_name
+from canboat_explorer.core.n2k import pgn_from_id, pgn_name
 
 BITRATE = 250_000
 
 
 def _open_bus(interface: str, channel: str | int):
     if interface == "waveshare":
-        from nemafiddler.bus.waveshare_bus import WaveshareCANBus
+        from canboat_explorer.bus.waveshare_bus import WaveshareCANBus
         return WaveshareCANBus(channel=str(channel), bitrate=BITRATE)
 
     import can

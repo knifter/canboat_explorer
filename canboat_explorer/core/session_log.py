@@ -143,5 +143,5 @@ class SessionLog:
     @staticmethod
     def default_path() -> Path:
         """Returns the canonical path for the active session log."""
-        from nemafiddler.core.paths import DATA_DIR
+        from canboat_explorer.core.paths import DATA_DIR
         return DATA_DIR / "session.canlog"

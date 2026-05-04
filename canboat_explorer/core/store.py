@@ -15,8 +15,8 @@ from typing import Literal
 import can
 from nmea2000.decoder import NMEA2000Decoder
 
-from nemafiddler.core.fast_packet import FastPacketReassembler, N2KMessage
-from nemafiddler.core.session_log import SessionLog
+from canboat_explorer.core.fast_packet import FastPacketReassembler, N2KMessage
+from canboat_explorer.core.session_log import SessionLog
 
 Priority = Literal["ignore", "highlight", "unknown"] | None
 

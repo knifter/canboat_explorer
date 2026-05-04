@@ -11,15 +11,16 @@ from PyQt6.QtWidgets import (
 )
 
 import can
-from nemafiddler.bus.can_reader import CanReader
-from nemafiddler.core.paths import data_dir
-from nemafiddler.core.session_log import SessionLog
-from nemafiddler.core.settings import settings
-from nemafiddler.core.store import DataStore
-from nemafiddler.ui.settings_dialog import SettingsDialog
-from nemafiddler.ui.tab_decoded import DecodedTab
-from nemafiddler.ui.tab_n2k import N2KTab
-from nemafiddler.ui.tab_raw_can import RawCanTab
+from canboat_explorer.bus.can_reader import CanReader
+from canboat_explorer.core.paths import data_dir
+from canboat_explorer.core.session_log import SessionLog
+from canboat_explorer.core.settings import settings
+from canboat_explorer.core.store import DataStore
+from canboat_explorer.ui.settings_dialog import SettingsDialog
+from canboat_explorer.ui.tab_decoded import DecodedTab
+from canboat_explorer.ui.tab_n2k import N2KTab
+from canboat_explorer.ui.tab_network import NetworkTab
+from canboat_explorer.ui.tab_raw_can import RawCanTab
 
 _DRAIN_INTERVAL_MS = 50
 _CANLOG_FILTER     = "CAN Log (*.canlog);;All files (*)"
@@ -92,13 +93,13 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
         file_menu.addAction(self._act_exit)
         about_menu = mb.addMenu("About")
-        act = QAction("About NemaFiddler", self)
+        act = QAction("About Canboat Explorer", self)
         act.triggered.connect(self._show_about)
         about_menu.addAction(act)
 
     def _show_about(self) -> None:
-        QMessageBox.about(self, "About NemaFiddler",
-            "<b>NemaFiddler</b><br>"
+        QMessageBox.about(self, "About Canboat Explorer",
+            "<b>Canboat Explorer</b><br>"
             "NMEA 2000 / CAN bus explorer<br><br>"
             "Reads live CAN traffic via Waveshare USB-CAN-A and other adapters,<br>"
             "decodes NMEA 2000 frames, and lets you inspect, filter, and save sessions.")
@@ -271,9 +272,9 @@ class MainWindow(QMainWindow):
     def _update_title(self) -> None:
         path = self._store.log.path
         if path == self._session_path:
-            self.setWindowTitle("NemaFiddler — session")
+            self.setWindowTitle("Canboat Explorer — session")
         else:
-            self.setWindowTitle(f"NemaFiddler — {path.name}")
+            self.setWindowTitle(f"Canboat Explorer — {path.name}")
 
     # ------------------------------------------------------------------
     # Connection

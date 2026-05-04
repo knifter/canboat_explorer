@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
 
 from nmea2000 import FieldTypes
 
-from nemafiddler.core.store import DataStore
+from canboat_explorer.core.store import DataStore
 
 _MAX_HISTORY = 20
 _SKIP_TYPES  = {FieldTypes.RESERVED, FieldTypes.SPARE}

@@ -1,7 +1,7 @@
 """Central location for application data paths."""
 from __future__ import annotations
 
-from nemafiddler.core.settings import settings
+from canboat_explorer.core.settings import settings
 
 
 def data_dir():

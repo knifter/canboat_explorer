@@ -9,9 +9,9 @@ from __future__ import annotations
 import configparser
 from pathlib import Path
 
-# Two levels up from nemafiddler/core/ → project root
+# Two levels up from canboat_explorer/core/ → project root
 _APP_DIR  = Path(__file__).resolve().parents[2]
-_INI_PATH = _APP_DIR / "nemafiddler.ini"
+_INI_PATH = _APP_DIR / "canboat_explorer.ini"
 
 _DEFAULTS: dict[str, dict[str, str]] = {
     "data": {

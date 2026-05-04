@@ -12,8 +12,8 @@ from PyQt6.QtWidgets import (
     QHeaderView,
 )
 
-from nemafiddler.core.n2k import parse as n2k_parse, pgn_name
-from nemafiddler.core.store import AccumEntry, DataStore, Priority
+from canboat_explorer.core.n2k import parse as n2k_parse, pgn_name
+from canboat_explorer.core.store import AccumEntry, DataStore, Priority
 
 # (header label, tooltip)
 _COLS_TIME: list[tuple[str, str]] = [
