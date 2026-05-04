@@ -350,8 +350,9 @@ class DecodedTab(QWidget):
         rows: list[tuple] = []
         for msg in msgs:
             msg.apply_preferred_units({})
-            section = _qualifier_label(msg) or f"SA:{msg.source}"
-            rows.append((True, section, None))
+            section = _qualifier_label(msg)
+            if section:
+                rows.append((True, section, None))
             for field in msg.fields:
                 if field.type not in _SKIP_TYPES:
                     rows.append((False, None, field))
