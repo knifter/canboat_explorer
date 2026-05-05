@@ -1,4 +1,4 @@
-# NemaFiddler — Design Document
+# Canboat Explorer — Design Document
 
 ## Purpose
 
@@ -14,10 +14,11 @@ A desktop application for exploring, debugging, and recording CAN / NMEA 2000 bu
 - **GUI framework: PyQt6** — best fit for large, responsive table UIs via virtual models (`QAbstractTableModel`). Only renders visible rows regardless of dataset size. Well-maintained, clean packaging on Windows, scales well as features are added.
 - **Log format: fixed-size binary records** — each incoming frame is appended as a fixed 22-byte record (8-byte timestamp + 4-byte arbitration ID + 1-byte DLC + 8-byte data + 1-byte flags). Flags byte encodes `is_error_frame` (bit 0), `is_remote_frame` (bit 1), `is_fd` (bit 2). Fast sequential writes, crash-safe, exact reproduction. The whole file is read into memory once at startup; the disk is not used as a search space. CSV export is a separate user-triggered operation.
 - **In-memory store is primary** — all querying, filtering, and display runs against the in-memory data model. The log file is write-only during live operation.
-- **Settings file: `.ini` at project root** — `configparser`-backed singleton (`nemafiddler.ini`). Stores `data_dir`, `last_interface`, `last_port`. Defaults written on first run. Data directory defaults to `<project root>/data/` (not AppData), so session files stay next to the application.
+- **Settings file: `.ini` at project root** — `configparser`-backed singleton (`canboat_explorer.ini`). Stores `data_dir`, `last_interface`, `last_port`. Defaults written on first run. Data directory defaults to `<project root>/data/` (not AppData), so session files stay next to the application.
 - **Package layout: `bus/` · `core/` · `ui/`** — `bus` owns adapter I/O; `core` owns `n2k`, `fast_packet`, `session_log`, `store`, `settings`, `paths`; `ui` owns all PyQt6 code.
 - **`can.Message` as the raw frame type** — python-can's `can.Message` is stored directly throughout the stack. No wrapper class. `can.Message.is_error_frame` surfaces real CAN bus errors (collision, CRC fail, etc.) and replaces any synthetic error injection. DLC is trusted as declared length. `recv()` exceptions signal a connection state change to the UI rather than entering the data stream.
 - **No `N2KFrame`** — PGN, SA, priority, and destination are extracted from `arbitration_id` with 3–4 lines of bit math inlined in `store.py`. A wrapper class would add indirection without value.
+- **PGN name lookup from bundled `canboat.json`** — `canboat_explorer/data/canboat.json` is the upstream PGN database that the nmea2000 library is generated from (Apache 2.0, © 2009-2025 Kees Verruijt). Parsed once at startup into `dict[int, str]` via `{e["PGN"]: e["Description"] for e in data["PGNs"]}`. Replaces the hand-maintained `PGN_NAMES` dict in `core/n2k.py`. The copyright notice must appear in the About dialog. Source: https://github.com/canboat/canboat/blob/master/docs/canboat.json
 - **nmea2000 (PyPI) for Tab 4** — `NMEA2000Decoder.decode(can.Message)` returns decoded field values (`NMEA2000Message`) or `None` for unknown/proprietary PGNs. It handles fast-packet reassembly internally. Tabs 1–3 use our own stack, which exposes raw payload bytes, frame counts, and persistence that nmea2000 does not provide.
 - **nmea2000's internal fast-packet reassembler not used for Tab 2/3** — it only surfaces the decoded result, never the raw assembled payload or frame count. It is tightly coupled to its own decoder and cannot be driven or queried independently. Tabs 2/3 need `payload:bytes`, `frame_count`, and per-frame timing, none of which nmea2000 exposes.
 - **`build_network_map=False` on the decoder** — `NMEA2000Decoder` is initialised without `build_network_map=True`. That flag would cause `decode()` to return `None` for any source that has not yet sent an ISO Address Claim (PGN 60928), silently dropping messages for up to 10 minutes from decoder startup — which breaks `bulk_load`. Tab 3 will harvest device identity directly from `decoded_by_key` entries for PGNs 60928, 126464, and 126996 instead.
@@ -173,15 +174,16 @@ Written down to lightly influence architecture; not committed.
 4. ✅ **NMEA 2000 parser** — PGN extraction, N2K validity check, ~80 known PGN names
 5. ✅ **Fast-packet reassembler** — heuristic detection (no PGN whitelist), 10 ms inter-frame stale timeout, produces `N2KMessage(pgn, sa, priority, payload, frame_count)`
 6. ✅ **In-memory data store** — `can.Message` list + `N2KMessage` list; three accumulation dicts; flag/highlight state persisted in sidecar JSON
-7. ✅ **UI shell** — main window, 4-tab layout, file toolbar + menu bar, connection widget, pause/continue, status bar; settings in `nemafiddler.ini`
+7. ✅ **UI shell** — main window, 4-tab layout, file toolbar + menu bar, connection widget, pause/continue, status bar; settings in `canboat_explorer.ini`
 8. ✅ **Tab 1 – Raw CAN** — virtual `QAbstractTableModel`, time/accumulated toggle, three grouping modes, average interval column
 9. ✅ **Tab 2 – NMEA 2000** — virtual table model, time/accumulated toggle
-10. **Tab 3 – Network** — `QTreeView` per SA; device identity from `decoded_by_key[(60928, sa, ())]`; PGN 126464 TX/RX cross-check; collision and discrepancy markers. Do NOT use `build_network_map=True` (breaks bulk_load).
-11. ✅ **Tab 4 – Decoded values** — 3-level tree (PGN → SA → qualifier) for qualifier PGNs, 2-level for others; stacked right-panel view for PGN/SA nodes; `decoded_by_key` keyed by `(pgn, sa, qualifier_tuple)`; qualifier computed from primary-key field raw values (not `msg.hash`); breadcrumb header; no colour tinting.
-12. ✅ **Flag / highlight controls** — sidecar JSON persistence done; right-click context menu pending
-13. ✅ **Unknown-PGN auto-flag** — PGNs for which `NMEA2000Decoder` returns `None` auto-flagged orange; `_known_pgns` set prevents trailing incomplete fast-packet sequences from re-oranging previously decoded PGNs on session reload.
-14. **Filter bar, CSV export** *(want-to-haves)*
-15. **Replay, annotations, pattern guesser** *(ideas — revisit post-core)*
+10. **PGN name lookup from canboat.json** — bundle `canboat_explorer/data/canboat.json`; load at startup; replace `PGN_NAMES` dict in `core/n2k.py`; add canboat copyright to About dialog.
+11. ✅ **Tab 3 – Network** — `QTreeView` per SA; device identity from `decoded_by_key[(60928, sa, ())]`; PGN 126464 TX/RX cross-check; collision and discrepancy markers. Do NOT use `build_network_map=True` (breaks bulk_load).
+12. ✅ **Tab 4 – Decoded values** — 3-level tree (PGN → SA → qualifier) for qualifier PGNs, 2-level for others; stacked right-panel view for PGN/SA nodes; `decoded_by_key` keyed by `(pgn, sa, qualifier_tuple)`; qualifier computed from primary-key field raw values (not `msg.hash`); breadcrumb header; no colour tinting.
+13. ✅ **Flag / highlight controls** — sidecar JSON persistence done; right-click context menu pending
+14. ✅ **Unknown-PGN auto-flag** — PGNs for which `NMEA2000Decoder` returns `None` auto-flagged orange; `_known_pgns` set prevents trailing incomplete fast-packet sequences from re-oranging previously decoded PGNs on session reload.
+15. **Filter bar, CSV export** *(want-to-haves)*
+16. **Replay, annotations, pattern guesser** *(ideas — revisit post-core)*
 
 ---
 
