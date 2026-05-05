@@ -21,7 +21,7 @@ jobs:
         run: pip install -e . pyinstaller
 
       - name: Build exe
-        run: pyinstaller --onefile --windowed --name canboat_explorer --collect-all nmea2000 --collect-all PyQt6 canboat_explorer/__main__.py
+        run: pyinstaller --onefile --windowed --name canboat_explorer --collect-all nmea2000 --collect-all PyQt6 --collect-data canboat_explorer canboat_explorer/__main__.py
 
       - name: Create release
         uses: softprops/action-gh-release@v2

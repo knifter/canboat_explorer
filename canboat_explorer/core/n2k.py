@@ -1,133 +1,35 @@
-"""NMEA 2000 frame parsing utilities."""
+"""NMEA 2000 frame parsing and PGN metadata loaded from bundled canboat.json."""
 from __future__ import annotations
+
+import importlib.resources
+import json
 
 import can
 
-PGN_NAMES: dict[int, str] = {
-    59392:	"ISO Acknowledgement",
-    59904:	"ISO Request",
-    60160:	"Multi packet data transfer",
-    60416:	"Multi packet connection management",
-    60928:	"ISO Address Claim",
-    61184:	"Parameter Request/Command",
-    65240:	"Commanded Address",
-    65280:	"[Manufacturer Proprietary single-frame non-addressed]",
-    65285:	"Temperature with Instance",
-    65287:	"Configure Temperature Insects",
-    65288:	"Set Alarm State",
-    65289:	"Trim Tab Insect Configuration, Calibration",
-    65290:	"Paddle Wheel Speed Configuration",
-    65291:	"Backlight Control",
-    65292:	"Clear Fluid Level Warnings",
-    65293:	"LGC-2000 Configuration",
-    65313:	"*",
-    65323:	"Data User Group Request",
-    65325:	"Reprogram Status",
-    65341:	"Autopilot Mode",
-    65379:	"Read Pilot Mode",
-    65480:	"Autopilot Mode",
-    65384:  "Raymarine Autopilot?",
-    126208:	"NMEA Request/Command/Ack group function, Set Pilot Mode",
-    126464:	"PGN List (Transmit and Receive)",
-    126983: "Notifications",
-    126985: "Notifications",
-    126992:	"System Time",
-    126993:	"Heartbeat",
-    126996:	"Product Information",
-    126998:	"Configuration Information",
-    126720:	"Seatalk: Raymarine Display Brightness",
-    127233:	"Man overboard Notification",
-    127237:	"Heading/Track Control",
-    127245:	"Rudder",
-    127250:	"Vessel Heading",
-    127251:	"Rate of Turn",
-    127257:	"Attitude",
-    127258:	"Magnetic Variation",
-    127488:	"Engine Parameters, Rapid Update",
-    127489:	"Engine Parameters, Dynamic",
-    127493:	"Transmission Parameters, Dynamic",
-    127497:	"Trip Parameters, Engine",
-    127501:	"Binary Status Report",
-    127503:	"AC input status",
-    127504:	"AC Output Status",
-    127505:	"Fluid Level",
-    127506:	"DC Detailed Status",
-    127507:	"Charger Status",
-    127508:	"Battery Status",
-    127509:	"Inverter Status",
-    127513:	"Battery Configuration Status",
-    128000:	"Leeway",
-    128259:	"Speed, Water Referenced",
-    128267:	"Water Depth",
-    128275:	"Distance Log",
-    128776:	"Anchor Windlass Control Status",
-    128777:	"Anchor Windlass Operating Status",
-    128778:	"Anchor Windlass Monitoring Status",
-    129025:	"Position, Rapid Update",
-    129026:	"COG & SOG, Rapid Update",
-    129029:	"GNSS Position Data",
-    129033:	"Time & Date",
-    129038:	"AIS Class A Position Report",
-    129039:	"AIS Class B Position Report",
-    129040:	"AIS Class B Extended Position Report",
-    129041:	"AIS aids to Navigation",
-    129044:	"Datum",
-    129283:	"Cross Track Error",
-    129284:	"Navigation Data",
-    129285:	"Route/Waypoint Data",
-    129291:	"Set/Drift Rapid Update",
-    129539:	"GNSS DOPs",
-    129540:	"GNSS Sats in View",
-    129547:	"0183: GNSS Pseudo range Error Statistics",
-    129793:	"---",
-    129794:	"AIS aids to Navigation, AIS Class A Static and Voyage Related Data",
-    129795:	"---",
-    129797:	"---",
-    129798:	"---",
-    129801:	"Cross Track Error, AIS Addressed Safety Related Message",
-    129802:	"AIS Safety Related Broadcast Message",
-    129808:	"DSC Call Information",
-    129809:	"AIS Class B “CS” Static Data Report",
-    129810:	"AIS Class B “CS” Static Data Report",
-    129811:	"---",
-    129812:	"---",
-    130074:	"Route and WP Service - WP List - WP Name & Position",
-    130306:	"Wind Data",
-    130310:	"Environmental Parameters, Sea and Air Temperature",
-    130311:	"Environmental Parameters, Atmospheric Pressure",
-    130312:	"Temperatures",
-    130313:	"Humidity, Outside/Inside",
-    130314:	"Atmospheric Pressure",
-    130315:	"Set pressure",
-    130312:	"Temperatures",
-    130323:	"MeteorlogicalStationData",
-    130576:	"Small Craft Status",
-    130577:	"Direction Data",
-    130578:	"0183: Dual Ground/Water Speed",
-    130817:	"Product Info",
-    130818:	"Reprogram Data",
-    130819:	"Request Reprogram",
-    130820:	"Reprogram Status",
-    130822:	"[AP44 sends these]",
-    130824:	"[AP44:ALM100 Annunciator]",
-    130828:	"Set Serial Number",
-    130831:	"Suzuki Engine and Storage Device Config",
-    130832:	"Fuel Used - High Resolution",
-    130834:	"Engine and Tank Configuration",
-    130835:	"Set Engine And Tank Configuration",
-    130836:	"Fluid Level Insect Configuration",
-    130837:	"Fuel Flow Turbine Configuration",
-    130838:	"Fluid Level Warn",
-    130839:	"Pressure Insect Configuration",
-    130840:	"Data User Group Configuration",
-    130842:	"SimNet DSC Message, AIS and VHF Message Transport",
-    130843:	"Sonar Status – Frequency and DSP Voltage",
-    130845:	"Parameter Handle, Weather and Fish Prediction and Barometric Pressure History",
-    130848: "Raymarine Route and Waypoint Information",
-    130850:	"Event Command, Evinrude Engine Warnings",
-    130851:	"Event Reply, Parameter (RC42 Compass and IS12 Wind Calibration and Configuration)",
-    130918: "Raymarine Route and Waypoint Information",
-}	
+
+def _load_pgn_lookup() -> dict[int, dict]:
+    path = importlib.resources.files("canboat_explorer") / "canboat.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    result: dict[int, dict] = {}
+    for entry in data["PGNs"]:
+        result.setdefault(entry["PGN"], entry)  # first occurrence wins
+    return result
+
+
+PGN_LOOKUP: dict[int, dict] = _load_pgn_lookup()
+
+
+def pgn_name(pgn: int) -> str:
+    entry = PGN_LOOKUP.get(pgn)
+    return entry["Description"] if entry else ""
+
+
+def pgn_from_id(arbitration_id: int) -> int:
+    dp = (arbitration_id >> 24) & 0x01
+    pf = (arbitration_id >> 16) & 0xFF
+    ps = (arbitration_id >>  8) & 0xFF
+    return ((dp << 16) | (pf << 8) | ps) if pf >= 240 else ((dp << 16) | (pf << 8))
+
 
 def parse(msg: can.Message) -> tuple[int, int, int, int] | None:
     """Return (pgn, sa, priority, dst) for extended-ID frames; None for standard."""
@@ -142,7 +44,3 @@ def parse(msg: can.Message) -> tuple[int, int, int, int] | None:
     pgn      = ((dp << 16) | (pf << 8) | ps) if pf >= 240 else ((dp << 16) | (pf << 8))
     dst      = ps if pf < 240 else 255
     return (pgn, sa, priority, dst)
-
-
-def pgn_name(pgn: int) -> str:
-    return PGN_NAMES.get(pgn, "")

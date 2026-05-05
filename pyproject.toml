@@ -18,3 +18,6 @@ canboat_explorer = "canboat_explorer.__main__:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["canboat_explorer*"]
+
+[tool.setuptools.package-data]
+canboat_explorer = ["canboat.json"]

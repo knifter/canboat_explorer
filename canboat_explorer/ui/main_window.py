@@ -100,10 +100,16 @@ class MainWindow(QMainWindow):
 
     def _show_about(self) -> None:
         QMessageBox.about(self, "About Canboat Explorer",
-            "<b>Canboat Explorer</b><br>"
-            "NMEA 2000 / CAN bus explorer<br><br>"
-            "Reads live CAN traffic via Waveshare USB-CAN-A and other adapters,<br>"
-            "decodes NMEA 2000 frames, and lets you inspect, filter, and save sessions.")
+            "<b>Canboat Explorer</b> — NMEA 2000 / CAN bus explorer<br>"
+            "© Tijs van Roon — <a href='https://github.com/knifter'>github.com/knifter</a> — GPL-3.0<br><br>"
+            "<b>Third-party components:</b><br>"
+            "· <b>PyQt6</b> © Riverbank Computing — GPL-3.0<br>"
+            "· <b>CANboat</b> PGN database © 2009-2025 Kees Verruijt — Apache 2.0<br>"
+            "&nbsp;&nbsp;<a href='https://github.com/canboat/canboat'>github.com/canboat/canboat</a><br>"
+            "· <b>nmea2000</b> © Tomer-w — Apache 2.0<br>"
+            "&nbsp;&nbsp;<a href='https://github.com/tomer-w/nmea2000'>github.com/tomer-w/nmea2000</a><br>"
+            "· <b>python-can</b> © python-can contributors — LGPL-3.0<br>"
+            "&nbsp;&nbsp;<a href='https://github.com/hardbyte/python-can'>github.com/hardbyte/python-can</a>")
 
     # ------------------------------------------------------------------
     # Toolbars
