@@ -19,6 +19,7 @@ A desktop application for exploring, debugging, and recording CAN / NMEA 2000 bu
 - **`can.Message` as the raw frame type** — python-can's `can.Message` is stored directly throughout the stack. No wrapper class. `can.Message.is_error_frame` surfaces real CAN bus errors (collision, CRC fail, etc.) and replaces any synthetic error injection. DLC is trusted as declared length. `recv()` exceptions signal a connection state change to the UI rather than entering the data stream.
 - **No `N2KFrame`** — PGN, SA, priority, and destination are extracted from `arbitration_id` with 3–4 lines of bit math inlined in `store.py`. A wrapper class would add indirection without value.
 - **PGN name lookup from bundled `canboat.json`** — `canboat_explorer/data/canboat.json` is the upstream PGN database that the nmea2000 library is generated from (Apache 2.0, © 2009-2025 Kees Verruijt). Parsed once at startup into `dict[int, str]` via `{e["PGN"]: e["Description"] for e in data["PGNs"]}`. Replaces the hand-maintained `PGN_NAMES` dict in `core/n2k.py`. The copyright notice must appear in the About dialog. Source: https://github.com/canboat/canboat/blob/master/docs/canboat.json
+- **SA-keyed PGN name cache** — `PGN_SA_NAMES: dict[tuple[int,int], str]` in `core/n2k.py`, populated reactively by the store after each successful decode: `PGN_SA_NAMES[(decoded.PGN, decoded.source)] = decoded.description`. `pgn_sa_name(pgn, sa)` falls back to `pgn_name(pgn)` if no SA-specific entry exists. Tabs 1/2 use this in preference to `pgn_name()` wherever SA is known. This surfaces manufacturer-specific variant names (e.g. "Simnet: Temperature" vs "Yamaha: Temperature") and is the source for detecting SA collision errors: if `{desc for (p,_), desc in PGN_SA_NAMES.items() if p == pgn}` has more than one distinct value, the PGN is auto-flagged Error.
 - **nmea2000 (PyPI) for Tab 4** — `NMEA2000Decoder.decode(can.Message)` returns decoded field values (`NMEA2000Message`) or `None` for unknown/proprietary PGNs. It handles fast-packet reassembly internally. Tabs 1–3 use our own stack, which exposes raw payload bytes, frame counts, and persistence that nmea2000 does not provide.
 - **nmea2000's internal fast-packet reassembler not used for Tab 2/3** — it only surfaces the decoded result, never the raw assembled payload or frame count. It is tightly coupled to its own decoder and cannot be driven or queried independently. Tabs 2/3 need `payload:bytes`, `frame_count`, and per-frame timing, none of which nmea2000 exposes.
 - **`build_network_map=False` on the decoder** — `NMEA2000Decoder` is initialised without `build_network_map=True`. That flag would cause `decode()` to return `None` for any source that has not yet sent an ISO Address Claim (PGN 60928), silently dropping messages for up to 10 minutes from decoder startup — which breaks `bulk_load`. Tab 3 will harvest device identity directly from `decoded_by_key` entries for PGNs 60928, 126464, and 126996 instead.
@@ -128,11 +129,18 @@ Bus Layer
 
   *Store:*
   - `decoded_by_key: dict[tuple[int, int, tuple], deque]` — keyed by `(pgn, sa, qualifier_tuple)`; bounded deque (`maxlen=200`), newest-first; `qualifier_tuple` is empty `()` when PGN has no primary-key fields.
-  - `_known_pgns: set[int]` — PGNs that have ever decoded successfully; gates the orange auto-flag so a trailing incomplete fast-packet sequence at the end of a session file does not re-orange PGNs that decoded correctly earlier.
-- **Visual priority system** — user can flag any PGN or arbitration ID:
-  - *Ignore* (grey): understood; softly fades across all tabs so unknown messages stand out
-  - *Highlight* (accentuated): draw attention to a specific message
-  - *Unknown* (orange, auto-applied): PGN not recognised by the nmea2000 decoder — covers proprietary messages and non-NMEA CAN frames
+  - `_known_pgns: set[int]` — PGNs that have ever decoded successfully; gates the warning/error auto-flags so a trailing incomplete fast-packet sequence at end of a session file does not re-flag PGNs that decoded correctly earlier.
+- **Visual priority system** — four flag levels, two user-set and two auto-applied. Colors are muted/desaturated, not primary:
+  - *Ignore* (muted grey, user-set): understood; softly fades the row across all tabs
+  - *Highlight* (muted accent, user-set): draw attention to a specific PGN or arb ID
+  - *Warning* (muted amber, auto-applied): something notable but not necessarily broken:
+    - PGN not recognised by the nmea2000 decoder (proprietary / non-NMEA CAN)
+    - Same PGN actively transmitted by two or more SAs (could be legitimate — e.g. apparent wind from one device, true wind from another)
+  - *Error* (muted red, auto-applied): indicates a likely bus or device fault:
+    - Same PGN decoded as two different manufacturer variants across different SAs — symptom of an SA address collision (two physical devices sharing one SA)
+    - Incomplete fast-packet sequence: frames received but packet never assembled (timed out)
+  - Tooltips on auto-flagged rows state the specific reason (e.g. "SA 22 and SA 47 both send PGN 130312 as different manufacturer variants")
+  - Flags shown in both Tab 1/2 row colouring and Tab 3 collision markers
 - **Crash-safe persistence** — frames written to log file on receipt, before UI processing
 - **Session continuity** — last session log always reopened on startup; flags and highlights persist
 - **File management**
@@ -147,7 +155,7 @@ Bus Layer
 ## Want-to-haves
 
 - **Filter / search bar** — filter rows in any tab by PGN, arbitration ID, SA, or text
-- **Unknown-PGN flag tooltip** — hover over an auto-flagged orange row to see why it was flagged (e.g. "PGN not recognised by nmea2000 decoder")
+- **Flag tooltip detail** — hover over any auto-flagged row to see the full reason string (moved to requirements as part of the revised flag system)
 - **CSV export** — user-triggered export of current session or a saved file to CSV, or better yet: use nmea2000 write file format, whatever that supports so other applications can also read this data.
 - **Data Sources** — Support other data sources/usb-adapters. TCP/IP? SignalK? 
 - **Message Sender** — A tab to send messages, clone from received or create new ones and periodically send these. 
@@ -177,13 +185,15 @@ Written down to lightly influence architecture; not committed.
 7. ✅ **UI shell** — main window, 4-tab layout, file toolbar + menu bar, connection widget, pause/continue, status bar; settings in `canboat_explorer.ini`
 8. ✅ **Tab 1 – Raw CAN** — virtual `QAbstractTableModel`, time/accumulated toggle, three grouping modes, average interval column
 9. ✅ **Tab 2 – NMEA 2000** — virtual table model, time/accumulated toggle
-10. **PGN name lookup from canboat.json** — bundle `canboat_explorer/data/canboat.json`; load at startup; replace `PGN_NAMES` dict in `core/n2k.py`; add canboat copyright to About dialog.
+10. ✅ **PGN name lookup from canboat.json** — `canboat_explorer/canboat.json` bundled as package data; loaded at startup via `importlib.resources`; `PGN_LOOKUP: dict[int, dict]` + `PGN_COUNT`; canboat + all third-party copyright in About dialog; GPL-3.0 project license.
 11. ✅ **Tab 3 – Network** — `QTreeView` per SA; device identity from `decoded_by_key[(60928, sa, ())]`; PGN 126464 TX/RX cross-check; collision and discrepancy markers. Do NOT use `build_network_map=True` (breaks bulk_load).
 12. ✅ **Tab 4 – Decoded values** — 3-level tree (PGN → SA → qualifier) for qualifier PGNs, 2-level for others; stacked right-panel view for PGN/SA nodes; `decoded_by_key` keyed by `(pgn, sa, qualifier_tuple)`; qualifier computed from primary-key field raw values (not `msg.hash`); breadcrumb header; no colour tinting.
 13. ✅ **Flag / highlight controls** — sidecar JSON persistence done; right-click context menu pending
-14. ✅ **Unknown-PGN auto-flag** — PGNs for which `NMEA2000Decoder` returns `None` auto-flagged orange; `_known_pgns` set prevents trailing incomplete fast-packet sequences from re-oranging previously decoded PGNs on session reload.
-15. **Filter bar, CSV export** *(want-to-haves)*
-16. **Replay, annotations, pattern guesser** *(ideas — revisit post-core)*
+14. ✅ **Auto-flag: unknown PGN (warning)** — PGNs for which `NMEA2000Decoder` returns `None` auto-flagged amber warning; `_known_pgns` guards against re-flagging on session reload.
+15. **Revised flag colour system** — four levels (grey / amber / red / highlight); muted palette; reclassify incomplete fast-packet as red error; add warning for multi-SA same-PGN; tooltips on all auto-flags.
+16. **SA-keyed PGN name cache + SA collision detection** — `PGN_SA_NAMES` populated reactively from decoded messages; `pgn_sa_name(pgn, sa)` in Tabs 1/2; auto-error when same PGN decodes as different manufacturer variants across SAs.
+17. **Filter bar, CSV export** *(want-to-haves)*
+18. **Replay, annotations, pattern guesser** *(ideas — revisit post-core)*
 
 ---
 
