@@ -4,7 +4,7 @@ import time
 from typing import Any
 
 from PyQt6.QtCore import (
-    QAbstractTableModel, QModelIndex, Qt,
+    QAbstractTableModel, QModelIndex, Qt, QTimer,
 )
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
@@ -284,10 +284,12 @@ class RawCanTab(QWidget):
         self._view = QTableView()
         self._view.setModel(self._time_model)
         hdr = self._view.horizontalHeader()
-        hdr.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setResizeContentsPrecision(50)
+        hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         hdr.setSectionResizeMode(_SEP_COL, QHeaderView.ResizeMode.Fixed)
         hdr.sectionResized.connect(self._on_section_resized)
         self._view.setColumnWidth(_SEP_COL, 8)
+        QTimer.singleShot(0, self._enable_autosize)
         self._view.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
         self._view.setEditTriggers(QTableView.EditTrigger.NoEditTriggers)
         self._view.verticalHeader().setVisible(False)
@@ -356,6 +358,13 @@ class RawCanTab(QWidget):
             rows = self._accum_model.rowCount()
             total = len(self._store.frames)
             self._count_label.setText(f"{rows:,} rows  ({total:,} frames)")
+
+    def _enable_autosize(self) -> None:
+        hdr = self._view.horizontalHeader()
+        sep = _SEP_COL_ACCUM if self._view.model() is self._accum_model else _SEP_COL
+        hdr.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(sep, QHeaderView.ResizeMode.Fixed)
+        self._view.setColumnWidth(sep, 8)
 
     def on_frames_added(self) -> None:
         model = self._view.model()
