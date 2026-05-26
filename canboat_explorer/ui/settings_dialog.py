@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+
 from serial.tools import list_ports
 
 from PyQt6.QtWidgets import (
@@ -9,7 +11,12 @@ from PyQt6.QtWidgets import (
 
 from canboat_explorer.core.settings import settings
 
-_INTERFACES = ["waveshare", "slcan", "gs_usb", "pcan", "socketcan"]
+_INTERFACES = ["waveshare", "slcan", "gs_usb", "pcan"]
+if sys.platform != "win32":
+    _INTERFACES.append("socketcan")
+
+_PCAN_CHANNELS    = [f"PCAN_USBBUS{i}" for i in range(1, 17)]
+_SOCKETCAN_NAMES  = [f"can{i}" for i in range(8)]
 
 _SERIAL_BAUDS = [9600, 19200, 38800, 115200, 1228800, 2000000]
 
@@ -37,6 +44,7 @@ class SettingsDialog(QDialog):
         self._port_combo.setMinimumWidth(220)
         self._refresh_btn = QPushButton("Refresh")
         self._refresh_btn.clicked.connect(self._refresh_ports)
+        self._iface_combo.currentTextChanged.connect(self._refresh_ports)
         self._refresh_ports()
 
         # COM baud
@@ -82,12 +90,29 @@ class SettingsDialog(QDialog):
     def _refresh_ports(self) -> None:
         current = self._port_combo.currentData()
         self._port_combo.clear()
-        ports = sorted(list_ports.comports(), key=lambda p: p.device)
-        for p in ports:
-            label = (f"{p.device}  —  {p.description}"
-                     if p.description and p.description != p.device
-                     else p.device)
-            self._port_combo.addItem(label, p.device)
+
+        iface = self._iface_combo.currentText()
+        if iface == "pcan":
+            for ch in _PCAN_CHANNELS:
+                self._port_combo.addItem(ch, ch)
+        elif iface == "gs_usb":
+            try:
+                from gs_usb.gs_usb import GsUsb
+                devs = GsUsb.scan()
+            except Exception:
+                devs = []
+            for i, _dev in enumerate(devs):
+                self._port_combo.addItem(f"Device {i}", str(i))
+        elif iface == "socketcan":
+            for name in _SOCKETCAN_NAMES:
+                self._port_combo.addItem(name, name)
+        else:
+            ports = sorted(list_ports.comports(), key=lambda p: p.device)
+            for p in ports:
+                label = (f"{p.device}  —  {p.description}"
+                         if p.description and p.description != p.device
+                         else p.device)
+                self._port_combo.addItem(label, p.device)
 
         # Restore previous selection, fall back to saved setting
         for candidate in (current, settings.last_port):

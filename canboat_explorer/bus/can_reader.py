@@ -109,7 +109,14 @@ class CanReader(threading.Thread):
                 bitrate=self.can_baud,
             )
 
-        kwargs: dict = {"interface": self.interface, "channel": self.channel}
+        channel: str | int = self.channel
+        if self.interface == "gs_usb":
+            try:
+                channel = int(channel)
+            except (TypeError, ValueError):
+                pass
+
+        kwargs: dict = {"interface": self.interface, "channel": channel}
         if self.interface in ("slcan", "gs_usb", "pcan"):
             kwargs["bitrate"] = self.can_baud
         # socketcan: bitrate is set at OS level, not passed here
