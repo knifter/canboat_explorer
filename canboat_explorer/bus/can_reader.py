@@ -41,6 +41,7 @@ class CanReader(threading.Thread):
         self._paused.set()          # not paused initially
         self._stop_flag = threading.Event()
         self.error: str | None = None
+        self._ts_offset: float | None = None
 
     # ------------------------------------------------------------------
     # Public control API (called from the GUI thread)
@@ -95,6 +96,9 @@ class CanReader(threading.Thread):
 
                 if not msg.timestamp:
                     msg.timestamp = time.time()
+                if self._ts_offset is None:
+                    self._ts_offset = time.time() - msg.timestamp
+                msg.timestamp += self._ts_offset
 
                 self.frame_queue.put(msg)
         finally:
