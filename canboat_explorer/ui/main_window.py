@@ -69,12 +69,12 @@ class MainWindow(QMainWindow):
         sp = self.style().standardIcon
         self._act_open     = QAction(sp(QStyle.StandardPixmap.SP_DialogOpenButton),    "Open…",     self)
         self._act_save     = QAction(sp(QStyle.StandardPixmap.SP_DialogSaveButton),    "Save as…",  self)
-        self._act_clear    = QAction(sp(QStyle.StandardPixmap.SP_TrashIcon),            "Clear",     self)
+        self._act_clear    = QAction(sp(QStyle.StandardPixmap.SP_FileIcon),               "New",       self)
         self._act_settings = QAction(sp(QStyle.StandardPixmap.SP_FileDialogDetailedView), "Settings…", self)
         self._act_exit     = QAction("Exit", self)
         self._act_open.setShortcut("Ctrl+O")
         self._act_save.setShortcut("Ctrl+S")
-        self._act_clear.setShortcut("Ctrl+L")
+        self._act_clear.setShortcut("Ctrl+N")
         self._act_exit.setShortcut("Ctrl+Q")
         self._act_open.triggered.connect(self._action_open)
         self._act_save.triggered.connect(self._action_save)
@@ -85,10 +85,10 @@ class MainWindow(QMainWindow):
     def _build_menubar(self) -> None:
         mb = self.menuBar()
         file_menu = mb.addMenu("File")
+        file_menu.addAction(self._act_clear)
+        file_menu.addSeparator()
         file_menu.addAction(self._act_open)
         file_menu.addAction(self._act_save)
-        file_menu.addSeparator()
-        file_menu.addAction(self._act_clear)
         file_menu.addSeparator()
         file_menu.addAction(self._act_settings)
         file_menu.addSeparator()
@@ -119,9 +119,9 @@ class MainWindow(QMainWindow):
         tb = QToolBar("File")
         tb.setMovable(False)
         self.addToolBar(tb)
+        tb.addAction(self._act_clear)
         tb.addAction(self._act_open)
         tb.addAction(self._act_save)
-        tb.addAction(self._act_clear)
         tb.addSeparator()
         tb.addAction(self._act_settings)
 
@@ -235,9 +235,10 @@ class MainWindow(QMainWindow):
         self._redirect_log(path, write_frames=list(self._store.frames))
 
     def _action_clear(self) -> None:
-        if self._store.frames:
+        on_session = self._store.log.path == self._session_path
+        if on_session and self._store.frames:
             reply = QMessageBox.question(
-                self, "Clear", "Discard all frames in the current session?",
+                self, "New", "Discard all frames in the current session?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
             if reply != QMessageBox.StandardButton.Yes:
                 return
