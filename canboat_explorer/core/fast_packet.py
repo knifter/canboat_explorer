@@ -1,9 +1,10 @@
 """Fast-packet reassembler for NMEA 2000 multi-frame messages.
 
-Detection is heuristic: a frame is treated as FP frame-0 when
+Detection: a frame is treated as FP frame-0 when
   - it is an extended-ID (N2K) frame
   - bits 4–0 of data[0] == 0  (frame index = 0)
   - 7 <= data[1] <= 223        (plausible total payload length)
+  - PGN is known-Fast OR unknown (known non-Fast PGNs are passed through as-is)
 
 Buffers are keyed by (sa, pgn, seq).  A buffer is flushed as a
 single-frame message if no continuation arrives within _STALE_S seconds
@@ -12,6 +13,8 @@ of the *previous* frame in that sequence.
 from __future__ import annotations
 
 from dataclasses import dataclass
+
+from canboat_explorer.core.n2k import PGN_LOOKUP
 
 import can
 
@@ -26,6 +29,7 @@ class N2KMessage:
     timestamp:   float   # timestamp of the first CAN frame
     payload:     bytes   # complete assembled payload
     frame_count: int     # number of CAN frames that made up this message
+    is_incomplete: bool = False  # True when the sequence timed out before completing
 
 
 @dataclass
@@ -71,6 +75,7 @@ class FastPacketReassembler:
                 timestamp=buf.start_ts,
                 payload=bytes(buf.first_frame.data[:buf.first_frame.dlc]),
                 frame_count=1,
+                is_incomplete=True,
             ))
 
         frame_idx = msg.data[0] & 0x1F
@@ -79,7 +84,8 @@ class FastPacketReassembler:
 
         if frame_idx == 0:
             length = msg.data[1]
-            if 7 <= length <= 223:
+            pgn_type = (PGN_LOOKUP.get(pgn) or {}).get("Type")
+            if 7 <= length <= 223 and pgn_type in (None, "Fast"):
                 self._buffers[key] = _Buffer(
                     pgn=pgn, sa=sa, priority=priority, seq=seq,
                     expected_len=length,
