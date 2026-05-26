@@ -18,7 +18,7 @@ from __future__ import annotations
 import sys
 import time
 
-from canboat_explorer.core.n2k import pgn_from_id, pgn_name
+from canboat_explorer.core.n2k_frame_info import n2k_frame_info
 
 BITRATE = 250_000
 
@@ -36,15 +36,13 @@ def _open_bus(interface: str, channel: str | int):
 
 
 def _fmt(msg) -> str:
-    pgn   = pgn_from_id(msg.arbitration_id)
-    name  = pgn_name(pgn)
-    src   = msg.arbitration_id & 0xFF
-    prio  = (msg.arbitration_id >> 26) & 0x07
-    ext   = "ext" if msg.is_extended_id else "std"
-    data  = bytes(msg.data).hex(" ").upper()
-    name_part = f"  ({name})" if name else ""
-    return (f"PGN {pgn:6d}{name_part:<28s}  "
-            f"src={src:3d}  prio={prio}  dlc={msg.dlc}  [{ext}]  {data}")
+    data = bytes(msg.data).hex(" ").upper()
+    n2k  = n2k_frame_info(msg)
+    if n2k is None:
+        return f"std  id={msg.arbitration_id:03X}  dlc={msg.dlc}  {data}"
+    name_part = f"  ({n2k.description})" if n2k.description else ""
+    return (f"PGN {n2k.pgn:6d}{name_part:<28s}  "
+            f"src={n2k.sa:3d}  prio={n2k.priority}  dlc={msg.dlc}  [ext]  {data}")
 
 
 def monitor(interface: str = "waveshare", channel: str | int = "COM7") -> None:

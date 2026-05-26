@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from canboat_explorer.core.n2k import PGN_LOOKUP
+from canboat_explorer.core.n2k_frame_info import n2k_frame_info
 
 import can
 
@@ -52,16 +52,9 @@ class FastPacketReassembler:
 
     def feed(self, msg: can.Message) -> list[N2KMessage]:
         """Process one CAN frame; return any N2KMessages that became complete."""
-        if not msg.is_extended_id or len(msg.data) < 2:
+        n2k = n2k_frame_info(msg)
+        if n2k is None or len(msg.data) < 2:
             return []
-
-        arb      = msg.arbitration_id
-        priority = (arb >> 26) & 0x07
-        dp       = (arb >> 24) & 0x01
-        pf       = (arb >> 16) & 0xFF
-        ps       = (arb >>  8) & 0xFF
-        sa       =  arb        & 0xFF
-        pgn      = ((dp << 16) | (pf << 8) | ps) if pf >= 240 else ((dp << 16) | (pf << 8))
 
         results: list[N2KMessage] = []
 
@@ -78,16 +71,13 @@ class FastPacketReassembler:
                 is_incomplete=True,
             ))
 
-        frame_idx = msg.data[0] & 0x1F
-        seq       = (msg.data[0] >> 5) & 0x07
-        key       = (sa, pgn, seq)
+        key = (n2k.sa, n2k.pgn, n2k.seq)
 
-        if frame_idx == 0:
+        if n2k.frame_idx == 0:
             length = msg.data[1]
-            pgn_type = (PGN_LOOKUP.get(pgn) or {}).get("Type")
-            if 7 <= length <= 223 and pgn_type in (None, "Fast"):
+            if 7 <= length <= 223 and n2k.is_fast:
                 self._buffers[key] = _Buffer(
-                    pgn=pgn, sa=sa, priority=priority, seq=seq,
+                    pgn=n2k.pgn, sa=n2k.sa, priority=n2k.priority, seq=n2k.seq,
                     expected_len=length,
                     payload=bytearray(msg.data[2:8]),
                     frame_count=1,
@@ -97,7 +87,7 @@ class FastPacketReassembler:
                 )
             else:
                 results.append(N2KMessage(
-                    pgn=pgn, sa=sa, priority=priority,
+                    pgn=n2k.pgn, sa=n2k.sa, priority=n2k.priority,
                     timestamp=msg.timestamp,
                     payload=bytes(msg.data[:msg.dlc]),
                     frame_count=1,
@@ -121,7 +111,7 @@ class FastPacketReassembler:
                 # data byte happens to have non-zero low 5 bits, or an orphaned
                 # continuation after a timeout.  Emit as-is so nothing is lost.
                 results.append(N2KMessage(
-                    pgn=pgn, sa=sa, priority=priority,
+                    pgn=n2k.pgn, sa=n2k.sa, priority=n2k.priority,
                     timestamp=msg.timestamp,
                     payload=bytes(msg.data[:msg.dlc]),
                     frame_count=1,

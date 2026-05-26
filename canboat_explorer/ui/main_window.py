@@ -165,7 +165,7 @@ class MainWindow(QMainWindow):
     def _build_statusbar(self) -> None:
         sb = QStatusBar()
         self.setStatusBar(sb)
-        from canboat_explorer.core.n2k import PGN_COUNT
+        from canboat_explorer.core.pgn_catalogue import PGN_COUNT
         self._status_label = QLabel(f"Disconnected — {PGN_COUNT} PGNs loaded")
         sb.addWidget(self._status_label)
 

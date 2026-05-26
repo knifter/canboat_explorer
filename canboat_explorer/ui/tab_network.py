@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
     QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
-from canboat_explorer.core.n2k import pgn_name
+from canboat_explorer.core.pgn_catalogue import pgn_name
 from canboat_explorer.core.store import DataStore
 
 _STALE_S    = 60.0

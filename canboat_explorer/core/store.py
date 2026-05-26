@@ -16,7 +16,8 @@ import can
 from nmea2000.decoder import NMEA2000Decoder
 
 from canboat_explorer.core.fast_packet import FastPacketReassembler, N2KMessage
-from canboat_explorer.core.n2k import pgn_name
+from canboat_explorer.core.n2k_frame_info import n2k_frame_info
+from canboat_explorer.core.pgn_catalogue import pgn_name
 from canboat_explorer.core.session_log import SessionLog
 
 Priority = Literal["ignore", "highlight", "warning", "error"] | None
@@ -88,18 +89,15 @@ class DataStore:
         if msg.is_error_frame:
             return   # error frames are stored in time list only
 
-        if msg.is_extended_id:
-            arb      = msg.arbitration_id
-            priority = (arb >> 26) & 0x07
-            dp       = (arb >> 24) & 0x01
-            pf       = (arb >> 16) & 0xFF
-            ps       = (arb >>  8) & 0xFF
-            sa       =  arb        & 0xFF
-            pgn      = ((dp << 16) | (pf << 8) | ps) if pf >= 240 else ((dp << 16) | (pf << 8))
-            is_n2k   = True
-        else:
+        n2k = n2k_frame_info(msg)
+        if n2k is None:
             pgn = sa = priority = 0
             is_n2k = False
+        else:
+            pgn      = n2k.pgn
+            sa       = n2k.sa
+            priority = n2k.priority
+            is_n2k   = True
 
         for n2k_msg in self._fp.feed(msg):
             self.n2k_messages.append(n2k_msg)

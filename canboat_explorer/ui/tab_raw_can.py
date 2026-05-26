@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (
     QHeaderView,
 )
 
-from canboat_explorer.core.n2k import parse as n2k_parse
+from canboat_explorer.core.n2k_frame_info import n2k_frame_info
 from canboat_explorer.core.store import AccumEntry, DataStore, Priority
 
 # (header label, tooltip)
@@ -109,7 +109,7 @@ class TimeViewModel(QAbstractTableModel):
         if row < 0 or row >= len(self._store.frames):
             return None
         frame = self._store.frames[row]
-        n2k   = n2k_parse(frame)
+        n2k   = n2k_frame_info(frame)
 
         if role == Qt.ItemDataRole.DisplayRole:
             if frame.is_error_frame:
@@ -126,11 +126,11 @@ class TimeViewModel(QAbstractTableModel):
             if col == 6:  return str(frame.dlc)
             if col == 7:  return bytes(frame.data[:frame.dlc]).hex(" ").upper()
             if col == 8:  return "N/A"
-            if col == 10: return f"{n2k[0]}  {self._store.pgn_sa_name(n2k[0], n2k[1])}" if n2k else ""
-            if col == 11: return str(n2k[1]) if n2k else ""
-            if col == 12: return str(n2k[2]) if n2k else ""
-            if col == 13: return str((frame.data[0] >> 5) & 0x07) if (n2k and len(frame.data) > 0) else "—"
-            if col == 14: return str(frame.data[0] & 0x1F)        if (n2k and len(frame.data) > 0) else "—"
+            if col == 10: return f"{n2k.pgn}  {self._store.pgn_sa_name(n2k.pgn, n2k.sa)}" if n2k else ""
+            if col == 11: return str(n2k.sa) if n2k else ""
+            if col == 12: return str(n2k.priority) if n2k else ""
+            if col == 13: return str(n2k.seq)       if (n2k and n2k.seq       is not None) else "—"
+            if col == 14: return str(n2k.frame_idx) if (n2k and n2k.frame_idx is not None) else "—"
 
         if frame.is_error_frame:
             if role == Qt.ItemDataRole.BackgroundRole:
@@ -141,7 +141,7 @@ class TimeViewModel(QAbstractTableModel):
 
         if role == Qt.ItemDataRole.ToolTipRole:
             if n2k:
-                reason = self._store.get_flag_reason(n2k[0])
+                reason = self._store.get_flag_reason(n2k.pgn)
                 if reason:
                     return reason
 
@@ -161,7 +161,7 @@ class TimeViewModel(QAbstractTableModel):
 
     def _flag_for(self, frame, n2k) -> Priority:
         if n2k is not None:
-            f = self._store.get_flag_by_pgn(n2k[0])
+            f = self._store.get_flag_by_pgn(n2k.pgn)
             if f:
                 return f
         return self._store.get_flag_by_arb(frame.arbitration_id)
@@ -214,7 +214,7 @@ class AccumViewModel(QAbstractTableModel):
             return None
         entry = d[keys[index.row()]]
         f     = entry.last_frame
-        n2k   = n2k_parse(f)
+        n2k   = n2k_frame_info(f)
         col   = index.column()
 
         if col == _SEP_COL_ACCUM:
@@ -232,11 +232,11 @@ class AccumViewModel(QAbstractTableModel):
             if col == 6:  return str(f.dlc)
             if col == 7:  return bytes(f.data[:f.dlc]).hex(" ").upper()
             if col == 8:  return "N/A"
-            if col == 10: return f"{n2k[0]}  {self._store.pgn_sa_name(n2k[0], n2k[1])}" if n2k else ""
-            if col == 11: return str(n2k[1]) if n2k else ""
-            if col == 12: return str(n2k[2]) if n2k else ""
-            if col == 13: return str((f.data[0] >> 5) & 0x07) if (n2k and len(f.data) > 0) else "—"
-            if col == 14: return str(f.data[0] & 0x1F)        if (n2k and len(f.data) > 0) else "—"
+            if col == 10: return f"{n2k.pgn}  {self._store.pgn_sa_name(n2k.pgn, n2k.sa)}" if n2k else ""
+            if col == 11: return str(n2k.sa) if n2k else ""
+            if col == 12: return str(n2k.priority) if n2k else ""
+            if col == 13: return str(n2k.seq)       if (n2k and n2k.seq       is not None) else "—"
+            if col == 14: return str(n2k.frame_idx) if (n2k and n2k.frame_idx is not None) else "—"
             if col == 15: return str(entry.count)
             if col == 16:
                 ms = entry.interval_ms
@@ -244,7 +244,7 @@ class AccumViewModel(QAbstractTableModel):
 
         if role == Qt.ItemDataRole.ToolTipRole:
             if n2k:
-                reason = self._store.get_flag_reason(n2k[0])
+                reason = self._store.get_flag_reason(n2k.pgn)
                 if reason:
                     return reason
 
@@ -263,7 +263,7 @@ class AccumViewModel(QAbstractTableModel):
 
     def _flag_for(self, frame, n2k) -> Priority:
         if n2k is not None:
-            f = self._store.get_flag_by_pgn(n2k[0])
+            f = self._store.get_flag_by_pgn(n2k.pgn)
             if f:
                 return f
         return self._store.get_flag_by_arb(frame.arbitration_id)
