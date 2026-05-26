@@ -218,6 +218,7 @@ class MainWindow(QMainWindow):
         self._store.bulk_load(frames)
         self._tab_raw.on_frames_added()
         self._tab_n2k.reset()
+        self._tab_n2k.on_messages_added()
         self._tab_network.reset()
         self._tab_network.on_messages_added()
         self._tab_decoded.reset()
@@ -240,16 +241,16 @@ class MainWindow(QMainWindow):
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
             if reply != QMessageBox.StandardButton.Yes:
                 return
-        active_path = self._store.log.path
         self._store.log.close()
-        # Truncate: reopen in write mode then switch back to append
-        active_path.write_bytes(b"")
-        self._store.log = SessionLog(active_path, append=True)
+        # Switch back to a fresh session.canlog; any previously-opened file is left untouched
+        self._session_path.write_bytes(b"")
+        self._store.log = SessionLog(self._session_path, append=True)
         self._store.reset_memory()
         self._tab_raw.on_frames_added()
         self._tab_n2k.reset()
         self._tab_network.reset()
         self._tab_decoded.reset()
+        self._update_title()
 
     def _action_settings(self) -> None:
         dlg = SettingsDialog(self)
