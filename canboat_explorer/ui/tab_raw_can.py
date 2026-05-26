@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (
     QHeaderView,
 )
 
-from canboat_explorer.core.n2k import parse as n2k_parse, pgn_name
+from canboat_explorer.core.n2k import parse as n2k_parse
 from canboat_explorer.core.store import AccumEntry, DataStore, Priority
 
 # (header label, tooltip)
@@ -58,9 +58,9 @@ _SEP_COL       = 9    # index of the "|" separator column in _COLS_TIME
 _SEP_COL_ACCUM = 9
 
 _COLOR_IGNORE    = QColor(160, 160, 160)
-_COLOR_HIGHLIGHT = QColor(255, 200,  60)
-_COLOR_UNKNOWN   = QColor(255, 140,  40)
-_COLOR_ERROR_BG  = QColor(200,  40,  40)
+_COLOR_HIGHLIGHT = QColor(240, 190,  50)
+_COLOR_WARNING   = QColor(210, 150,  60)
+_COLOR_ERROR     = QColor(185,  75,  75)
 _COLOR_ERROR_FG  = QColor(255, 255, 255)
 _COLOR_SEP_BG    = QColor(210, 210, 210)
 
@@ -126,7 +126,7 @@ class TimeViewModel(QAbstractTableModel):
             if col == 6:  return str(frame.dlc)
             if col == 7:  return bytes(frame.data[:frame.dlc]).hex(" ").upper()
             if col == 8:  return "N/A"
-            if col == 10: return f"{n2k[0]}  {pgn_name(n2k[0])}" if n2k else ""
+            if col == 10: return f"{n2k[0]}  {self._store.pgn_sa_name(n2k[0], n2k[1])}" if n2k else ""
             if col == 11: return str(n2k[1]) if n2k else ""
             if col == 12: return str(n2k[2]) if n2k else ""
             if col == 13: return str((frame.data[0] >> 5) & 0x07) if (n2k and len(frame.data) > 0) else "—"
@@ -134,20 +134,28 @@ class TimeViewModel(QAbstractTableModel):
 
         if frame.is_error_frame:
             if role == Qt.ItemDataRole.BackgroundRole:
-                return _COLOR_ERROR_BG
+                return _COLOR_ERROR
             if role == Qt.ItemDataRole.ForegroundRole:
                 return _COLOR_ERROR_FG
             return None
+
+        if role == Qt.ItemDataRole.ToolTipRole:
+            if n2k:
+                reason = self._store.get_flag_reason(n2k[0])
+                if reason:
+                    return reason
 
         if role == Qt.ItemDataRole.ForegroundRole:
             flag = self._flag_for(frame, n2k)
             if flag == "ignore":    return _COLOR_IGNORE
             if flag == "highlight": return QColor(0, 0, 0)
+            if flag == "error":     return _COLOR_ERROR_FG
 
         if role == Qt.ItemDataRole.BackgroundRole:
             flag = self._flag_for(frame, n2k)
             if flag == "highlight": return _COLOR_HIGHLIGHT
-            if flag == "unknown":   return _COLOR_UNKNOWN
+            if flag == "warning":   return _COLOR_WARNING
+            if flag == "error":     return _COLOR_ERROR
 
         return None
 
@@ -224,7 +232,7 @@ class AccumViewModel(QAbstractTableModel):
             if col == 6:  return str(f.dlc)
             if col == 7:  return bytes(f.data[:f.dlc]).hex(" ").upper()
             if col == 8:  return "N/A"
-            if col == 10: return f"{n2k[0]}  {pgn_name(n2k[0])}" if n2k else ""
+            if col == 10: return f"{n2k[0]}  {self._store.pgn_sa_name(n2k[0], n2k[1])}" if n2k else ""
             if col == 11: return str(n2k[1]) if n2k else ""
             if col == 12: return str(n2k[2]) if n2k else ""
             if col == 13: return str((f.data[0] >> 5) & 0x07) if (n2k and len(f.data) > 0) else "—"
@@ -234,14 +242,22 @@ class AccumViewModel(QAbstractTableModel):
                 ms = entry.interval_ms
                 return f"{ms:.0f} ms" if ms is not None else "—"
 
+        if role == Qt.ItemDataRole.ToolTipRole:
+            if n2k:
+                reason = self._store.get_flag_reason(n2k[0])
+                if reason:
+                    return reason
+
         if role == Qt.ItemDataRole.ForegroundRole:
             flag = self._flag_for(f, n2k)
-            if flag == "ignore": return _COLOR_IGNORE
+            if flag == "ignore":  return _COLOR_IGNORE
+            if flag == "error":   return _COLOR_ERROR_FG
 
         if role == Qt.ItemDataRole.BackgroundRole:
             flag = self._flag_for(f, n2k)
             if flag == "highlight": return _COLOR_HIGHLIGHT
-            if flag == "unknown":   return _COLOR_UNKNOWN
+            if flag == "warning":   return _COLOR_WARNING
+            if flag == "error":     return _COLOR_ERROR
 
         return None
 

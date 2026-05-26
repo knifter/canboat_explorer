@@ -4,14 +4,20 @@ import time
 from typing import Any
 
 from PyQt6.QtCore import QAbstractTableModel, QModelIndex, Qt
+from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QHBoxLayout, QLabel, QPushButton, QTableView, QVBoxLayout, QWidget,
     QHeaderView,
 )
 
 from canboat_explorer.core.fast_packet import N2KMessage
-from canboat_explorer.core.n2k import pgn_name
-from canboat_explorer.core.store import DataStore
+from canboat_explorer.core.store import DataStore, Priority
+
+_COLOR_IGNORE    = QColor(160, 160, 160)
+_COLOR_HIGHLIGHT = QColor(240, 190,  50)
+_COLOR_WARNING   = QColor(210, 150,  60)
+_COLOR_ERROR     = QColor(185,  75,  75)
+_COLOR_ERROR_FG  = QColor(255, 255, 255)
 
 _COLS_TIME: list[tuple[str, str]] = [
     ("Time",         "Timestamp of the first CAN frame of this message."),
@@ -66,21 +72,42 @@ class N2KTimeViewModel(QAbstractTableModel):
         return None
 
     def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> Any:
-        if not index.isValid() or role != Qt.ItemDataRole.DisplayRole:
+        if not index.isValid():
             return None
         row = len(self._store.n2k_messages) - 1 - index.row()
         if row < 0 or row >= len(self._store.n2k_messages):
             return None
         msg = self._store.n2k_messages[row]
         col = index.column()
-        if col == 0: return _fmt_time(msg.timestamp)
-        if col == 1: return str(msg.pgn)
-        if col == 2: return pgn_name(msg.pgn)
-        if col == 3: return str(msg.sa)
-        if col == 4: return str(msg.priority)
-        if col == 5: return str(len(msg.payload))
-        if col == 6: return msg.payload.hex(" ").upper()
-        if col == 7: return str(msg.frame_count)
+
+        if role == Qt.ItemDataRole.DisplayRole:
+            if col == 0: return _fmt_time(msg.timestamp)
+            if col == 1: return str(msg.pgn)
+            if col == 2: return self._store.pgn_sa_name(msg.pgn, msg.sa)
+            if col == 3: return str(msg.sa)
+            if col == 4: return str(msg.priority)
+            if col == 5: return str(len(msg.payload))
+            if col == 6: return msg.payload.hex(" ").upper()
+            if col == 7: return str(msg.frame_count)
+            return None
+
+        flag = self._store.get_flag_by_pgn(msg.pgn)
+
+        if role == Qt.ItemDataRole.ToolTipRole:
+            reason = self._store.get_flag_reason(msg.pgn)
+            if reason:
+                return reason
+
+        if role == Qt.ItemDataRole.ForegroundRole:
+            if flag == "ignore":    return _COLOR_IGNORE
+            if flag == "highlight": return QColor(0, 0, 0)
+            if flag == "error":     return _COLOR_ERROR_FG
+
+        if role == Qt.ItemDataRole.BackgroundRole:
+            if flag == "highlight": return _COLOR_HIGHLIGHT
+            if flag == "warning":   return _COLOR_WARNING
+            if flag == "error":     return _COLOR_ERROR
+
         return None
 
     def refresh(self) -> None:
@@ -114,7 +141,7 @@ class N2KAccumViewModel(QAbstractTableModel):
         return None
 
     def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> Any:
-        if not index.isValid() or role != Qt.ItemDataRole.DisplayRole:
+        if not index.isValid():
             return None
         keys = list(self._by_pgn_sa.keys())
         if index.row() >= len(keys):
@@ -122,22 +149,43 @@ class N2KAccumViewModel(QAbstractTableModel):
         key = keys[index.row()]
         msg = self._by_pgn_sa[key]
         col = index.column()
-        if col == 0: return _fmt_time(msg.timestamp)
-        if col == 1: return str(msg.pgn)
-        if col == 2: return pgn_name(msg.pgn)
-        if col == 3: return str(msg.sa)
-        if col == 4: return str(msg.priority)
-        if col == 5: return str(len(msg.payload))
-        if col == 6: return msg.payload.hex(" ").upper()
-        if col == 7: return str(self._counts[key])
-        if col == 8:
-            count = self._counts[key]
-            if count < 2:
-                return "—"
-            elapsed = msg.timestamp - self._first_ts[key]
-            if elapsed <= 0:
-                return "—"
-            return f"{elapsed / (count - 1) * 1000:.0f} ms"
+
+        if role == Qt.ItemDataRole.DisplayRole:
+            if col == 0: return _fmt_time(msg.timestamp)
+            if col == 1: return str(msg.pgn)
+            if col == 2: return self._store.pgn_sa_name(msg.pgn, msg.sa)
+            if col == 3: return str(msg.sa)
+            if col == 4: return str(msg.priority)
+            if col == 5: return str(len(msg.payload))
+            if col == 6: return msg.payload.hex(" ").upper()
+            if col == 7: return str(self._counts[key])
+            if col == 8:
+                count = self._counts[key]
+                if count < 2:
+                    return "—"
+                elapsed = msg.timestamp - self._first_ts[key]
+                if elapsed <= 0:
+                    return "—"
+                return f"{elapsed / (count - 1) * 1000:.0f} ms"
+            return None
+
+        flag = self._store.get_flag_by_pgn(msg.pgn)
+
+        if role == Qt.ItemDataRole.ToolTipRole:
+            reason = self._store.get_flag_reason(msg.pgn)
+            if reason:
+                return reason
+
+        if role == Qt.ItemDataRole.ForegroundRole:
+            if flag == "ignore":    return _COLOR_IGNORE
+            if flag == "highlight": return QColor(0, 0, 0)
+            if flag == "error":     return _COLOR_ERROR_FG
+
+        if role == Qt.ItemDataRole.BackgroundRole:
+            if flag == "highlight": return _COLOR_HIGHLIGHT
+            if flag == "warning":   return _COLOR_WARNING
+            if flag == "error":     return _COLOR_ERROR
+
         return None
 
     def refresh(self) -> None:

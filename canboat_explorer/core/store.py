@@ -16,9 +16,10 @@ import can
 from nmea2000.decoder import NMEA2000Decoder
 
 from canboat_explorer.core.fast_packet import FastPacketReassembler, N2KMessage
+from canboat_explorer.core.n2k import pgn_name
 from canboat_explorer.core.session_log import SessionLog
 
-Priority = Literal["ignore", "highlight", "unknown"] | None
+Priority = Literal["ignore", "highlight", "warning", "error"] | None
 
 
 @dataclass
@@ -54,9 +55,14 @@ class DataStore:
         self.decoded_by_key: dict[tuple[int, int, tuple], deque] = {}
         self._fp = FastPacketReassembler()
         self._n2k_decoder = NMEA2000Decoder()
-        self._unknown_pgns: set[int] = set()
-        self._known_pgns:   set[int] = set()
-        self._unknown_arbs: set[int] = set()
+        self._unknown_pgns:     set[int] = set()
+        self._known_pgns:       set[int] = set()
+        self._unknown_arbs:     set[int] = set()
+        self._multi_sa_pgns:      set[int] = set()
+        self._collision_pgns:     set[int] = set()
+        self._incomplete_fp_pgns: set[int] = set()
+        self._complete_fp_pgns:   set[int] = set()
+        self.pgn_sa_names: dict[tuple[int, int], str] = {}
 
         # JSON-serialisable flag dict; keys are "a:<arb_id>" or "p:<pgn>"
         self._flags: dict[str, str] = {}
@@ -95,7 +101,12 @@ class DataStore:
             pgn = sa = priority = 0
             is_n2k = False
 
-        self.n2k_messages.extend(self._fp.feed(msg))
+        for n2k_msg in self._fp.feed(msg):
+            self.n2k_messages.append(n2k_msg)
+            if n2k_msg.is_incomplete:
+                self._incomplete_fp_pgns.add(n2k_msg.pgn)
+            elif n2k_msg.frame_count > 1:
+                self._complete_fp_pgns.add(n2k_msg.pgn)
 
         if is_n2k:
             decoded = self._n2k_decoder.decode(msg)
@@ -114,6 +125,17 @@ class DataStore:
                 if key not in self.decoded_by_key:
                     self.decoded_by_key[key] = deque(maxlen=200)
                 self.decoded_by_key[key].appendleft(decoded)
+
+                sa_key = (decoded.PGN, decoded.source)
+                self.pgn_sa_names[sa_key] = decoded.description
+                other_descs = {
+                    desc for (p, s), desc in self.pgn_sa_names.items()
+                    if p == decoded.PGN and s != decoded.source
+                }
+                if other_descs:
+                    self._multi_sa_pgns.add(decoded.PGN)
+                    if decoded.description not in other_descs:
+                        self._collision_pgns.add(decoded.PGN)
         elif msg.arbitration_id not in self._unknown_arbs:
             self._unknown_arbs.add(msg.arbitration_id)
 
@@ -144,21 +166,41 @@ class DataStore:
     # Flag / highlight state
     # ------------------------------------------------------------------
 
+    def pgn_sa_name(self, pgn: int, sa: int) -> str:
+        return self.pgn_sa_names.get((pgn, sa)) or pgn_name(pgn)
+
     def get_flag_by_arb(self, arb_id: int) -> Priority:
         user = self._flags.get(f"a:{arb_id}")
         if user:
             return user  # type: ignore[return-value]
         if arb_id in self._unknown_arbs:
-            return "unknown"
+            return "warning"
         return None
 
     def get_flag_by_pgn(self, pgn: int) -> Priority:
         user = self._flags.get(f"p:{pgn}")
         if user:
             return user  # type: ignore[return-value]
-        if pgn in self._unknown_pgns and pgn not in self._known_pgns:
-            return "unknown"
+        if pgn in self._collision_pgns:
+            return "error"
+        if pgn in self._incomplete_fp_pgns and pgn not in self._complete_fp_pgns:
+            return "error"
+        if (pgn in self._unknown_pgns and pgn not in self._known_pgns) or pgn in self._multi_sa_pgns:
+            return "warning"
         return None
+
+    def get_flag_reason(self, pgn: int) -> str:
+        if pgn in self._collision_pgns:
+            variants = {desc for (p, _), desc in self.pgn_sa_names.items() if p == pgn}
+            return f"PGN {pgn}: SA address collision — different device variants: {', '.join(sorted(variants))}"
+        if pgn in self._incomplete_fp_pgns and pgn not in self._complete_fp_pgns:
+            return f"PGN {pgn}: incomplete fast-packet sequence (timed out before all frames arrived)"
+        if pgn in self._multi_sa_pgns:
+            sas = sorted(s for (p, s) in self.pgn_sa_names if p == pgn)
+            return f"PGN {pgn}: transmitted by multiple source addresses: {sas}"
+        if pgn in self._unknown_pgns and pgn not in self._known_pgns:
+            return f"PGN {pgn}: not recognised by nmea2000 decoder"
+        return ""
 
     def set_flag_by_arb(self, arb_id: int, value: Priority) -> None:
         self._set(f"a:{arb_id}", value)
@@ -206,6 +248,11 @@ class DataStore:
         self._unknown_pgns.clear()
         self._known_pgns.clear()
         self._unknown_arbs.clear()
+        self._multi_sa_pgns.clear()
+        self._collision_pgns.clear()
+        self._incomplete_fp_pgns.clear()
+        self._complete_fp_pgns.clear()
+        self.pgn_sa_names.clear()
 
     def clear(self) -> None:
         """Archive the current log, reset in-memory state, start fresh."""
