@@ -1,7 +1,21 @@
 # DataStore Data Audit
 
-Current state after session 2026-05-07. Documents all data structures in `DataStore`,
+Current state as of 2026-05-27, after the `pgn_catalogue` / `n2k_frame_info`
+refactor (commit `db4b656`). Documents all data structures in `DataStore`,
 their write/read patterns, and what can still be simplified.
+
+### Surrounding modules
+
+- **`core/pgn_catalogue.py`** — Loads bundled `canboat.json` once at import
+  time into the module-global `PGN_LOOKUP: dict[int, dict]` (PGN → catalogue
+  entry). Exposes `pgn_name(pgn)` for description lookup. This is the single
+  source of truth for *static* PGN metadata (description, type/Fast flag, etc.).
+- **`core/n2k_frame_info.py`** — `n2k_frame_info(msg)` decodes a CAN frame's
+  arbitration ID into a `N2KFrameInfo` NamedTuple containing `pgn`, `description`,
+  `sa`, `priority`, `dst`, `grp`, `is_fast`, `seq`, `frame_idx`. The description
+  and `is_fast` come from `PGN_LOOKUP`. This is the canonical entry point for
+  arb-ID parsing — `store._add()`, `fast_packet.feed()`, and the raw-CAN tab all
+  go through it instead of cherry-picking bits inline.
 
 ---
 
@@ -40,10 +54,11 @@ from different brands sharing the same PGN).
 |---|---|---|---|---|---|
 | `pgn_sa_names` | `dict[tuple[int,int], str]` | (pgn, sa) | `decoded.description` (resolved variant name) | Every successful decode in `_add()`, overwriting previous value | `pgn_sa_name()` method (read during rendering by both tab_raw_can and tab_n2k); `get_flag_reason()` (collision variant list, multi-SA SA list) |
 
-Previously maintained twice: as `PGN_SA_NAMES` (module-global in `n2k.py`) and as
-`_pgn_sa_descs` (instance field on DataStore). Now unified into one dict on the store.
-Small dict in practice: one entry per (pgn, sa) pair seen, typically 5–15 entries on a
-real N2K bus.
+Holds the *variant-specific* description returned by the nmea2000 decoder (e.g.
+the manufacturer-resolved name for a proprietary PGN). When no entry exists,
+`pgn_sa_name()` falls back to the generic catalogue description via
+`pgn_name(pgn)` in `pgn_catalogue`. Small dict in practice: one entry per
+(pgn, sa) pair seen, typically 5–15 entries on a real N2K bus.
 
 ### Private flag-detection sets
 
@@ -72,7 +87,10 @@ real N2K bus.
 ```
 _add(msg)
   → frames.append()
+  → n2k_frame_info(msg)              [extended-ID only → pgn/sa/priority/is_fast]
+      → PGN_LOOKUP.get(pgn)          [catalogue: description, Type]
   → _fp.feed(msg)
+      → n2k_frame_info(msg)          [same call inside FP; used for seq/frame_idx/is_fast]
       → n2k_messages.append()
       → _incomplete_fp_pgns.add()    [if stale flush]
       → _complete_fp_pgns.add()      [if frame_count > 1]
@@ -89,13 +107,17 @@ _add(msg)
   → by_pgn update                    [N2K only]
 ```
 
+Note: `n2k_frame_info(msg)` is called twice per frame (once in `_add`, once in
+`_fp.feed`). Both calls hit `PGN_LOOKUP.get()` (O(1) dict lookup). Cheap, but
+worth knowing if profiling ever points here.
+
 ### Rendering — called per UI refresh (warm path, not hot)
 
 ```
 tab_raw_can TimeViewModel.data(col=10)
   → store.pgn_sa_name(pgn, sa)
-      → pgn_sa_names.get()           [O(1)]
-      → pgn_name(pgn)                [fallback, reads PGN_LOOKUP in n2k.py]
+      → pgn_sa_names.get()           [O(1) — variant-specific decoded name]
+      → pgn_name(pgn)                [fallback, reads PGN_LOOKUP in pgn_catalogue.py]
 
 tab_raw_can TimeViewModel.data(ForegroundRole/BackgroundRole)
   → store.get_flag_by_pgn(pgn)       [called per visible row]       TvR: Searches dicts, slow
@@ -156,20 +178,45 @@ Different data, different purpose. Not a duplicate.
 
 ### `tab_network` has its own `_collision_pgns()` method
 `tab_network.py` line 119 has a local `_collision_pgns()` method that scans
-`store.by_pgn_sa` to detect PGNs from multiple SAs. This duplicates the logic in
-`store._collision_pgns` (the set) and `store._multi_sa_pgns`. If the store exposes
-collision/multi-SA info directly, `tab_network` should use it instead of recomputing.
+`store.by_pgn_sa` to detect PGNs from multiple SAs. Note: this detects the
+*multi-SA* condition (same as `store._multi_sa_pgns`), not the stronger
+*different-variant* condition that `store._collision_pgns` checks (which
+requires resolved description strings to differ). If the store exposes a
+multi-SA accessor, `tab_network` should use it instead of recomputing.
 
-### What was moved this session
-- `PGN_SA_NAMES` (module-global mutable dict in `n2k.py`) → `DataStore.pgn_sa_names`
-- `pgn_sa_name()` (free function in `n2k.py`) → `DataStore.pgn_sa_name()` method
-- `_pgn_sa_descs` (duplicate instance dict) → eliminated, merged into `pgn_sa_names`
-- `fast_packet.py` now imports `PGN_LOOKUP` to guard heuristic against known non-Fast PGNs
+### What changed in the `pgn_catalogue` / `n2k_frame_info` refactor (db4b656)
+
+- Extracted catalogue loading and `pgn_name()` from `n2k.py` into a dedicated
+  `core/pgn_catalogue.py` module. `PGN_LOOKUP` is now imported wherever needed
+  instead of being a side-effect of importing `n2k.py`.
+- Introduced `core/n2k_frame_info.py` with the `N2KFrameInfo` NamedTuple and
+  the `n2k_frame_info(msg)` function. This is the single place that parses
+  N2K arbitration IDs (`pgn`/`sa`/`priority`/`dst`/`grp`) and joins them
+  with catalogue data (`description`/`is_fast`) and fast-packet header bytes
+  (`seq`/`frame_idx`).
+- `store._add()` no longer extracts PGN/SA/priority with inline bit-shifts —
+  it calls `n2k_frame_info(msg)` once and reads fields off the NamedTuple.
+- `fast_packet.feed()` was rewritten on top of `n2k_frame_info()`. The
+  Fast-packet heuristic now consults `n2k.is_fast` (which combines "PGN
+  marked Fast in the catalogue" with "PGN unknown to the catalogue"); the
+  earlier hand-coded `_KNOWN_NON_FAST` set is gone.
+- `tab_raw_can` parses frames via `n2k_frame_info()` instead of cherry-picking
+  arb-ID bits in the view model.
+- `tab_network` imports `pgn_name` from `pgn_catalogue` (previously `n2k`).
 
 ### What can still be removed
 
 **`_unknown_pgns`** — replace with `pgn in by_pgn and pgn not in _known_pgns`.
 `by_pgn` is already maintained and only contains N2K PGNs. No behaviour change.
+
+Note: an alternative definition `pgn in by_pgn and pgn not in PGN_LOOKUP`
+would *not* be equivalent, but also wouldn't be more useful — the `nmea2000`
+library's decode functions are generated 1:1 from `canboat.json` (verified:
+both contain the same 339 PGNs). So a PGN missing from `PGN_LOOKUP` is also
+missing from the decoder. The only difference between the two definitions is
+runtime decode failure (malformed/truncated payload of a catalogued PGN),
+which the current `_known_pgns`-based definition correctly flags as a
+warning. Keep the current logic.
 
 **`_multi_sa_pgns` and `_collision_pgns`** — both are cached derivations of
 `pgn_sa_names`. Since `pgn_sa_names` is tiny (≤20 entries), computing on demand during
@@ -179,6 +226,16 @@ concern, but it's a trade-off to document.
 
 If removed, the scan in `_add()` that builds these sets can also be removed. The only
 cost is that `get_flag_by_pgn` iterates `pgn_sa_names` instead of doing a set lookup.
+
+**`pgn_sa_names` revisited.** Now that `pgn_catalogue.pgn_name()` gives a
+generic description for every catalogued PGN, `pgn_sa_names` only earns its
+keep for the *variant-resolved* case (proprietary PGNs where the decoder picks
+a manufacturer-specific name). For non-variant PGNs the catalogue would
+return the same string. Pruning entries that match the catalogue description
+would keep the dict smaller and make `_collision_pgns` (which compares
+variant strings) more precise — but the current overwrite-every-frame
+behaviour is simpler and cheap at current sizes. Not a refactor priority,
+just worth noting.
 
 **Remaining after full cleanup:**
 ```
