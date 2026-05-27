@@ -12,9 +12,10 @@ of the *previous* frame in that sequence.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from canboat_explorer.core.n2k_frame_info import n2k_frame_info
+from canboat_explorer.core.raw_frame import RawFrame
 
 import can
 
@@ -29,7 +30,9 @@ class N2KMessage:
     timestamp:   float   # timestamp of the first CAN frame
     payload:     bytes   # complete assembled payload
     frame_count: int     # number of CAN frames that made up this message
-    is_incomplete: bool = False  # True when the sequence timed out before completing
+    is_complete: bool = True   # False when the sequence timed out before completing
+    decoded:     bool = False  # True if nmea2000 decoder returned a NMEA2000Message
+    frames:      list[RawFrame] = field(default_factory=list)
 
 
 @dataclass
@@ -43,14 +46,14 @@ class _Buffer:
     frame_count:  int
     start_ts:     float
     last_frame_ts: float
-    first_frame:  can.Message
+    first_frame:  RawFrame
 
 
 class FastPacketReassembler:
     def __init__(self) -> None:
         self._buffers: dict[tuple[int, int, int], _Buffer] = {}
 
-    def feed(self, msg: can.Message) -> list[N2KMessage]:
+    def feed(self, msg: RawFrame) -> list[N2KMessage]:
         """Process one CAN frame; return any N2KMessages that became complete."""
         n2k = n2k_frame_info(msg)
         if n2k is None or len(msg.data) < 2:
@@ -68,7 +71,7 @@ class FastPacketReassembler:
                 timestamp=buf.start_ts,
                 payload=bytes(buf.first_frame.data[:buf.first_frame.dlc]),
                 frame_count=1,
-                is_incomplete=True,
+                is_complete=False,
             ))
 
         key = (n2k.sa, n2k.pgn, n2k.seq)

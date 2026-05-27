@@ -18,6 +18,7 @@ from nmea2000.decoder import NMEA2000Decoder
 from canboat_explorer.core.fast_packet import FastPacketReassembler, N2KMessage
 from canboat_explorer.core.n2k_frame_info import n2k_frame_info
 from canboat_explorer.core.pgn_catalogue import pgn_name
+from canboat_explorer.core.raw_frame import RawFrame
 from canboat_explorer.core.session_log import SessionLog
 
 Priority = Literal["ignore", "highlight", "warning", "error"] | None
@@ -25,7 +26,7 @@ Priority = Literal["ignore", "highlight", "warning", "error"] | None
 
 @dataclass
 class AccumEntry:
-    last_frame: can.Message
+    last_frame: RawFrame
     count: int
     first_ts: float = 0.0
 
@@ -48,7 +49,7 @@ class DataStore:
         self.log = log
         self.sidecar_path = sidecar_path
 
-        self.frames: list[can.Message] = []
+        self.frames: list[RawFrame] = []
         self.by_arb_id: dict[int, AccumEntry] = {}
         self.by_pgn_sa: dict[tuple[int, int], AccumEntry] = {}
         self.by_pgn: dict[int, AccumEntry] = {}
@@ -75,15 +76,16 @@ class DataStore:
 
     def ingest(self, msg: can.Message) -> None:
         """Append one frame from live capture: write to log + update memory."""
-        self.log.append(msg)
-        self._add(msg)
+        raw = RawFrame.wrap(msg)
+        self.log.append(raw)
+        self._add(raw)
 
-    def bulk_load(self, frames: list[can.Message]) -> None:
+    def bulk_load(self, frames: list[RawFrame]) -> None:
         """Load existing frames at startup without writing to the log."""
         for f in frames:
             self._add(f)
 
-    def _add(self, msg: can.Message) -> None:
+    def _add(self, msg: RawFrame) -> None:
         self.frames.append(msg)
 
         if msg.is_error_frame:
@@ -101,7 +103,7 @@ class DataStore:
 
         for n2k_msg in self._fp.feed(msg):
             self.n2k_messages.append(n2k_msg)
-            if n2k_msg.is_incomplete:
+            if not n2k_msg.is_complete:
                 self._incomplete_fp_pgns.add(n2k_msg.pgn)
             elif n2k_msg.frame_count > 1:
                 self._complete_fp_pgns.add(n2k_msg.pgn)

@@ -19,6 +19,8 @@ from typing import Iterator
 
 import can
 
+from canboat_explorer.core.raw_frame import RawFrame
+
 RECORD_SIZE = 22
 _PACK = struct.Struct(">dIB8sB")  # float64, uint32, uint8, 8s, uint8  → 22 bytes
 
@@ -35,9 +37,9 @@ def encode(msg: can.Message) -> bytes:
     return _PACK.pack(msg.timestamp, msg.arbitration_id, msg.dlc, data, flags)
 
 
-def decode(raw: bytes) -> can.Message:
+def decode(raw: bytes) -> RawFrame:
     ts, arb_id, dlc, data, flags = _PACK.unpack(raw)
-    return can.Message(
+    return RawFrame(
         timestamp=ts,
         arbitration_id=arb_id,
         dlc=dlc,
@@ -89,9 +91,9 @@ class SessionLog:
     # Read side
     # ------------------------------------------------------------------
 
-    def load(self) -> list[can.Message]:
+    def load(self) -> list[RawFrame]:
         """Read all records from disk into memory."""
-        frames: list[can.Message] = []
+        frames: list[RawFrame] = []
         if not self.path.exists():
             return frames
         data = self.path.read_bytes()
@@ -104,7 +106,7 @@ class SessionLog:
                 break   # truncated record at end (e.g. from a crash) — stop here
         return frames
 
-    def iter_records(self) -> Iterator[can.Message]:
+    def iter_records(self) -> Iterator[RawFrame]:
         """Iterate records without loading all into memory (for large files)."""
         if not self.path.exists():
             return
