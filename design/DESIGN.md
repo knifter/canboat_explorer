@@ -16,10 +16,16 @@ A desktop application for exploring, debugging, and recording CAN / NMEA 2000 bu
 - **In-memory store is primary** — all querying, filtering, and display runs against the in-memory data model. The log file is write-only during live operation.
 - **Settings file: `.ini` at project root** — `configparser`-backed singleton (`canboat_explorer.ini`). Stores `data_dir`, `last_interface`, `last_port`. Defaults written on first run. Data directory defaults to `<project root>/data/` (not AppData), so session files stay next to the application.
 - **Package layout: `bus/` · `core/` · `ui/`** — `bus` owns adapter I/O; `core` owns `n2k`, `fast_packet`, `session_log`, `store`, `settings`, `paths`; `ui` owns all PyQt6 code.
-- **`can.Message` as the raw frame type** — python-can's `can.Message` is stored directly throughout the stack. No wrapper class. `can.Message.is_error_frame` surfaces real CAN bus errors (collision, CRC fail, etc.) and replaces any synthetic error injection. DLC is trusted as declared length. `recv()` exceptions signal a connection state change to the UI rather than entering the data stream.
-- **No `N2KFrame`** — PGN, SA, priority, and destination are extracted from `arbitration_id` with 3–4 lines of bit math inlined in `store.py`. A wrapper class would add indirection without value.
-- **PGN name lookup from bundled `canboat.json`** — `canboat_explorer/data/canboat.json` is the upstream PGN database that the nmea2000 library is generated from (Apache 2.0, © 2009-2025 Kees Verruijt). Parsed once at startup into `dict[int, str]` via `{e["PGN"]: e["Description"] for e in data["PGNs"]}`. Replaces the hand-maintained `PGN_NAMES` dict in `core/n2k.py`. The copyright notice must appear in the About dialog. Source: https://github.com/canboat/canboat/blob/master/docs/canboat.json
-- **SA-keyed PGN name cache** — `PGN_SA_NAMES: dict[tuple[int,int], str]` in `core/n2k.py`, populated reactively by the store after each successful decode: `PGN_SA_NAMES[(decoded.PGN, decoded.source)] = decoded.description`. `pgn_sa_name(pgn, sa)` falls back to `pgn_name(pgn)` if no SA-specific entry exists. Tabs 1/2 use this in preference to `pgn_name()` wherever SA is known. This surfaces manufacturer-specific variant names (e.g. "Simnet: Temperature" vs "Yamaha: Temperature") and is the source for detecting SA collision errors: if `{desc for (p,_), desc in PGN_SA_NAMES.items() if p == pgn}` has more than one distinct value, the PGN is auto-flagged Error.
+- **Raw frame type: `RawFrame(can.Message)`** — python-can's `can.Message` uses `__slots__` and forbids dynamic attributes, so per-frame state (specifically: a back-link to the assembled `N2KMessage` the frame contributed to) cannot be attached directly. We subclass with one extra slot: `class RawFrame(can.Message): __slots__ = ('n2k_msg',)`. `RawFrame` is constructed at every ingress (`SessionLog.decode()` and at `store._add()` entry from the queue). Since `RawFrame` IS-A `can.Message`, all consumers — including the nmea2000 library — see it as a normal CAN frame. `is_error_frame` surfaces real CAN bus errors (collision, CRC fail, etc.); DLC is trusted as declared length; `recv()` exceptions signal a connection state change to the UI rather than entering the data stream.
+- **No `N2KFrame` wrapper; central arb-ID parser** — PGN, SA, priority, destination (PDU1), group extension (PDU2), `is_fast`, and the FP `seq`/`frame_idx` are extracted by `n2k_frame_info(msg)` in `core/n2k_frame_info.py`, which returns a `NamedTuple` (`N2KFrameInfo`) joining bit-level arb-ID parsing with catalogue data (description, `is_fast`). All consumers — `store._add()`, `FastPacketReassembler.feed()`, `tab_raw_can` — use this single function instead of cherry-picking arb-ID bits inline.
+- **PGN catalogue: `core/pgn_catalogue.py`** — bundled `canboat_explorer/canboat.json` is the upstream PGN database that the nmea2000 library is generated from (Apache 2.0, © 2009-2025 Kees Verruijt). Parsed once at startup into `PGN_LOOKUP: dict[int, dict]` using first-occurrence-wins (canboat lists variants per PGN; only one entry per PGN is kept). `pgn_name(pgn)` returns the generic description, `""` if unknown. The copyright notice must appear in the About dialog. Source: https://github.com/canboat/canboat/blob/master/docs/canboat.json
+- **SA-keyed PGN name cache: `DataStore.pgn_sa_names`** — `dict[tuple[int,int], str]` populated reactively from `decoded.description` on every successful decode. `store.pgn_sa_name(pgn, sa)` returns the variant-resolved name if known, else falls back to `pgn_catalogue.pgn_name(pgn)`. Tabs 1/2 use this in preference to the catalogue alone wherever SA is known — surfaces manufacturer-specific variant names like "Simnet: Temperature" vs "Yamaha: Temperature". (SA-address-collision detection — same PGN producing different variant descriptions across SAs — has moved to Tab 3, see "Visual priority system" below.)
+- **Decode success/failure is a per-message property** — `decoded: bool` on `N2KMessage`, set from the decoder's return on emit (`True` if the library returned a `NMEA2000Message`, `False` if `None`). Replaces the previous global `_unknown_pgns`/`_known_pgns` PGN-level tracking. Row-level flagging in Tab 2 reads this directly. Note: the library returns `None` for any of "could not decode", "filtered out", or "PGN unsupported" — for row-flagging purposes they're equivalent ("the bytes did not turn into structured data on this row").
+- **Fast-packet completion is a per-message property** — `N2KMessage.is_complete: bool` (defaults `True`; set `False` when our `FastPacketReassembler` emits a stale-timed-out buffer). Replaces the previous global `_incomplete_fp_pgns`/`_complete_fp_pgns` sets.
+- **Bidirectional frame ↔ message links** — `FastPacketReassembler._Buffer` keeps `contributing_frames: list[RawFrame]`. On emit (complete or stale-flush), each contributing frame's `n2k_msg` is set to the new `N2KMessage`, and the new message's `frames: list[RawFrame]` holds the same list. Single-frame N2K PGNs link 1:1 trivially. Out-of-band frames (standard 11-bit ID, error frames, FP continuations that arrived after a buffer timed out) keep `n2k_msg=None` and are flagged accordingly in the Raw CAN view.
+- **Decoder result aligned with FP emit timing** — `NMEA2000Decoder.decode(msg)` handles fast-packet internally and returns `None` for intermediate FP frames, the assembled `NMEA2000Message` on the completing frame. Our `FastPacketReassembler.feed(msg)` emits in the same pattern. We line up the two by call timing: when `_fp.feed(msg)` emits a non-`is_complete=False` `N2KMessage`, the decoder's return on the same `msg` is the decoded form of that same message. No payload reconstruction, no second decode pass.
+- **Library FP buffer not used for visibility** — `NMEA2000Decoder` has its own FP reassembler with private state (`self.data`, `FastPgnMetadata`). It provides no stale detection (buffers wait forever for missing frames), no incomplete-sequence notification (silently overwritten when a new sequence with same `pgn_src_dest` key arrives), no intermediate visibility (returns `None` while accumulating). We keep our own `FastPacketReassembler` precisely for these signals — they are the explorer-tool value.
+- **Per-row, per-message flag detection** — auto-flags are computed from properties of a single frame (`frame.n2k_msg is None`) or a single message (`n2k_msg.decoded`, `n2k_msg.is_complete`), not from PGN-level aggregate state. See "Visual priority system" for full reclassification.
 - **nmea2000 (PyPI) for Tab 4** — `NMEA2000Decoder.decode(can.Message)` returns decoded field values (`NMEA2000Message`) or `None` for unknown/proprietary PGNs. It handles fast-packet reassembly internally. Tabs 1–3 use our own stack, which exposes raw payload bytes, frame counts, and persistence that nmea2000 does not provide.
 - **nmea2000's internal fast-packet reassembler not used for Tab 2/3** — it only surfaces the decoded result, never the raw assembled payload or frame count. It is tightly coupled to its own decoder and cannot be driven or queried independently. Tabs 2/3 need `payload:bytes`, `frame_count`, and per-frame timing, none of which nmea2000 exposes.
 - **`build_network_map=False` on the decoder** — `NMEA2000Decoder` is initialised without `build_network_map=True`. That flag would cause `decode()` to return `None` for any source that has not yet sent an ISO Address Claim (PGN 60928), silently dropping messages for up to 10 minutes from decoder startup — which breaks `bulk_load`. Tab 3 will harvest device identity directly from `decoded_by_key` entries for PGNs 60928, 126464, and 126996 instead.
@@ -44,39 +50,45 @@ Bus Layer
       ▼
   CanReader  (background thread)
       │  sets msg.timestamp = time.time() if not already set by driver
-      │  pushes can.Message directly to frame_queue (thread-safe)
+      │  pushes can.Message to frame_queue (thread-safe)
       │  recv() exceptions → connection-state signal to UI, not a fake frame
       ▼
   frame_queue → DataStore  (drained every 50 ms on main thread)
+      │  wraps incoming can.Message → RawFrame (adds n2k_msg slot, default None)
       │
-      ├── SessionLog                       → disk (.canlog)
+      ├── SessionLog                       → disk (.canlog) [encodes inherited slots only]
+      │                                      decode() reconstructs as RawFrame
       │
       ├── DataStore.frames                 → Tab 1 – Raw CAN
-      │       list[can.Message]                time view  (all frames, newest first)
-      │                                         accum view (by arb_id / PGN+SA / PGN)
+      │       list[RawFrame]                   time view  (all frames, newest first)
+      │       row flag: n2k_msg is None         accum view (by arb_id / PGN+SA / PGN)
+      │       and not is_error_frame
       │
       ├── FastPacketReassembler            → Tab 2 – NMEA 2000
-      │       input:  can.Message              time view  (assembled messages, newest first)
-      │       heuristic FP detection           accum view (by PGN+SA, count + interval)
-      │       10 ms inter-frame stale timeout
-      │       → N2KMessage(timestamp, pgn, sa, priority, payload:bytes, frame_count)
-      │         dead end — raw bytes only, no field decoding
+      │       input:  RawFrame                  time view  (assembled messages, newest first)
+      │       heuristic FP detection            accum view (by PGN+SA, count + interval)
+      │       10 ms inter-frame stale timeout   row flags: not n2k_msg.is_complete (error)
+      │       _Buffer.contributing_frames                  not n2k_msg.decoded     (warning)
+      │       → N2KMessage(timestamp, pgn, sa, priority, payload:bytes,
+      │                    frame_count, is_complete, decoded, frames)
       │
-      ├── FastPacketReassembler (same)     → Tab 3 – Network
+      ├── (N2KMessage stream, same)        → Tab 3 – Network
       │       filters N2KMessage for:          device tree per SA
       │         PGN 60928  address claim        PGN advertised/observed cross-check
-      │         PGN 126464 PGN list             collision + discrepancy markers
-      │         PGN 126996 product info
+      │         PGN 126464 PGN list             multi-SA + variant-collision markers
+      │         PGN 126996 product info         (sole owner of collision detection)
       │
       └── NMEA2000Decoder.decode(msg)      → Tab 4 – Decoded Values
-              input: can.Message directly       3-level tree: PGN → SA → qualifier
+              input: RawFrame directly          3-level tree: PGN → SA → qualifier
               handles FP internally             stacked view for PGN/SA nodes
-              returns None for unknown PGNs     single-message view for qualifier leaves
-              build_network_map=False           history entries expandable under leaf
+              returns None for unsupported/     single-message view for qualifier leaves
+                intermediate-FP/filtered        history entries expandable under leaf
+              build_network_map=False
               → NMEA2000Message(pgn, source, fields...)
                 stored in decoded_by_key[(pgn, sa, qualifier_tuple)]
                 qualifier_tuple = sorted primary-key field (id, raw_value) pairs
                 maxlen=200 deque per key, newest-first
+              also sets n2k_msg.decoded = (result is not None) on the matching emit
 ```
 
 ### What `nmea2000` (PyPI) Provides vs Our Stack
@@ -85,7 +97,7 @@ Bus Layer
 |---|---|---|
 | Open CAN bus | `WaveshareCANBus` / `can.Bus` | same `can.Bus` underneath |
 | Raw frame representation | `can.Message` (direct) | `can.Message` (direct) |
-| Bit extraction (PGN/SA/priority) | inlined in `store.py` | internal |
+| Bit extraction (PGN/SA/priority/FP header) | `n2k_frame_info()` in `core/n2k_frame_info.py` | internal |
 | Fast-packet reassembly | `FastPacketReassembler` → raw bytes | `NMEA2000Decoder` internal → decoded fields |
 | Assembled raw payload | `N2KMessage.payload` (bytes) | not exposed |
 | Persistence / session log | `SessionLog` (.canlog) | nothing |
@@ -128,19 +140,17 @@ Bus Layer
   - `field.value` after `apply_preferred_units({})`.
 
   *Store:*
-  - `decoded_by_key: dict[tuple[int, int, tuple], deque]` — keyed by `(pgn, sa, qualifier_tuple)`; bounded deque (`maxlen=200`), newest-first; `qualifier_tuple` is empty `()` when PGN has no primary-key fields.
-  - `_known_pgns: set[int]` — PGNs that have ever decoded successfully; gates the warning/error auto-flags so a trailing incomplete fast-packet sequence at end of a session file does not re-flag PGNs that decoded correctly earlier.
-- **Visual priority system** — four flag levels, two user-set and two auto-applied. Colors are muted/desaturated, not primary:
+  - `decoded_by_key: dict[tuple[int, int, tuple], deque]` — keyed by `(pgn, sa, qualifier_tuple)`; bounded deque (`maxlen=200`), newest-first; `qualifier_tuple` is empty `()` when PGN has no primary-key fields. (Reload safety is handled per-message via `N2KMessage.decoded`; no PGN-level "ever seen good" state required.)
+- **Visual priority system** — four flag levels, two user-set and two auto-applied. Colors are muted/desaturated, not primary. **Auto-flags are now per-row** (derived from frame or message state on that row), never PGN-aggregate:
   - *Ignore* (muted grey, user-set): understood; softly fades the row across all tabs
   - *Highlight* (muted accent, user-set): draw attention to a specific PGN or arb ID
-  - *Warning* (muted amber, auto-applied): something notable but not necessarily broken:
-    - PGN not recognised by the nmea2000 decoder (proprietary / non-NMEA CAN)
-    - Same PGN actively transmitted by two or more SAs (could be legitimate — e.g. apparent wind from one device, true wind from another)
-  - *Error* (muted red, auto-applied): indicates a likely bus or device fault:
-    - Same PGN decoded as two different manufacturer variants across different SAs — symptom of an SA address collision (two physical devices sharing one SA)
-    - Incomplete fast-packet sequence: frames received but packet never assembled (timed out)
-  - Tooltips on auto-flagged rows state the specific reason (e.g. "SA 22 and SA 47 both send PGN 130312 as different manufacturer variants")
-  - Flags shown in both Tab 1/2 row colouring and Tab 3 collision markers
+  - *Warning* (muted amber, auto-applied):
+    - **Tab 1 – Raw CAN**: frame is out-of-band — `frame.n2k_msg is None` and `not frame.is_error_frame`. Covers standard 11-bit IDs, FP continuations that arrived after their buffer timed out, and anything else that did not participate in an assembled N2K message.
+    - **Tab 2 – NMEA 2000**: `not n2k_msg.decoded` — the assembled message exists but the nmea2000 library returned `None` for it (could not parse the payload, PGN excluded by filter, or PGN unsupported).
+  - *Error* (muted red, auto-applied):
+    - **Tab 2 – NMEA 2000**: `not n2k_msg.is_complete` — fast-packet sequence timed out before all frames arrived.
+  - **Network-level signals (Tab 3 only)** — multi-SA-same-PGN and SA-address-collision (same PGN producing different variant descriptions across SAs) are detected and shown only in the Network tab. They no longer apply row flags in Tabs 1/2. Tab 3 maintains its own detection by scanning `store.by_pgn_sa` and `store.pgn_sa_names`.
+  - Tooltips on auto-flagged rows state the specific reason.
 - **Crash-safe persistence** — frames written to log file on receipt, before UI processing
 - **Session continuity** — last session log always reopened on startup; flags and highlights persist
 - **File management**
@@ -189,9 +199,9 @@ Written down to lightly influence architecture; not committed.
 11. ✅ **Tab 3 – Network** — `QTreeView` per SA; device identity from `decoded_by_key[(60928, sa, ())]`; PGN 126464 TX/RX cross-check; collision and discrepancy markers. Do NOT use `build_network_map=True` (breaks bulk_load).
 12. ✅ **Tab 4 – Decoded values** — 3-level tree (PGN → SA → qualifier) for qualifier PGNs, 2-level for others; stacked right-panel view for PGN/SA nodes; `decoded_by_key` keyed by `(pgn, sa, qualifier_tuple)`; qualifier computed from primary-key field raw values (not `msg.hash`); breadcrumb header; no colour tinting.
 13. ✅ **Flag / highlight controls** — sidecar JSON persistence done; right-click context menu pending
-14. ✅ **Auto-flag: unknown PGN (warning)** — PGNs for which `NMEA2000Decoder` returns `None` auto-flagged amber warning; `_known_pgns` guards against re-flagging on session reload.
-15. **Revised flag colour system** — four levels (grey / amber / red / highlight); muted palette; reclassify incomplete fast-packet as red error; add warning for multi-SA same-PGN; tooltips on all auto-flags.
-16. **SA-keyed PGN name cache + SA collision detection** — `PGN_SA_NAMES` populated reactively from decoded messages; `pgn_sa_name(pgn, sa)` in Tabs 1/2; auto-error when same PGN decodes as different manufacturer variants across SAs.
+14. ✅ **Auto-flag: unknown PGN (warning) — original implementation** — PGN-level auto-flag with `_unknown_pgns`/`_known_pgns` tracking. Superseded by item 15.
+15. **Per-row flag refactor** — replace PGN-level auto-flag state (`_unknown_pgns`, `_known_pgns`, `_unknown_arbs`, `_incomplete_fp_pgns`, `_complete_fp_pgns`, `_multi_sa_pgns`, `_collision_pgns`) with per-frame and per-message signals. Subclass `can.Message` as `RawFrame` with a `n2k_msg` back-link slot; extend `N2KMessage` with `decoded: bool`, `is_complete: bool`, and `frames: list[RawFrame]`; have `FastPacketReassembler._Buffer` track contributing frames and emit them on the message; align the nmea2000 decoder result with our FP emit by call timing. Row flagging logic in Tabs 1/2 reads frame/message state directly; collision detection migrates to Tab 3 as the sole owner. See `design/store-data-audit.md` for the implementation phases and commit boundaries.
+16. ✅ **SA-keyed PGN name cache** — `DataStore.pgn_sa_names` populated reactively from `decoded.description`; `store.pgn_sa_name(pgn, sa)` falls back to `pgn_catalogue.pgn_name(pgn)`. (Cross-SA variant-collision detection moved to Tab 3 as part of item 15.)
 17. **Filter bar, CSV export** *(want-to-haves)*
 18. **Replay, annotations, pattern guesser** *(ideas — revisit post-core)*
 
