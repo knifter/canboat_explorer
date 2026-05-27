@@ -37,16 +37,17 @@ class N2KMessage:
 
 @dataclass
 class _Buffer:
-    pgn:          int
-    sa:           int
-    priority:     int
-    seq:          int
-    expected_len: int
-    payload:      bytearray
-    frame_count:  int
-    start_ts:     float
-    last_frame_ts: float
-    first_frame:  RawFrame
+    pgn:                 int
+    sa:                  int
+    priority:            int
+    seq:                 int
+    expected_len:        int
+    payload:             bytearray
+    frame_count:         int
+    start_ts:            float
+    last_frame_ts:       float
+    first_frame:         RawFrame
+    contributing_frames: list[RawFrame] = field(default_factory=list)
 
 
 class FastPacketReassembler:
@@ -72,6 +73,7 @@ class FastPacketReassembler:
                 payload=bytes(buf.first_frame.data[:buf.first_frame.dlc]),
                 frame_count=1,
                 is_complete=False,
+                frames=buf.contributing_frames,
             ))
 
         key = (n2k.sa, n2k.pgn, n2k.seq)
@@ -87,6 +89,7 @@ class FastPacketReassembler:
                     start_ts=msg.timestamp,
                     last_frame_ts=msg.timestamp,
                     first_frame=msg,
+                    contributing_frames=[msg],
                 )
             else:
                 results.append(N2KMessage(
@@ -94,6 +97,7 @@ class FastPacketReassembler:
                     timestamp=msg.timestamp,
                     payload=bytes(msg.data[:msg.dlc]),
                     frame_count=1,
+                    frames=[msg],
                 ))
         else:
             buf = self._buffers.get(key)
@@ -101,6 +105,7 @@ class FastPacketReassembler:
                 buf.payload.extend(msg.data[1:8])
                 buf.frame_count += 1
                 buf.last_frame_ts = msg.timestamp
+                buf.contributing_frames.append(msg)
                 if len(buf.payload) >= buf.expected_len:
                     self._buffers.pop(key)
                     results.append(N2KMessage(
@@ -108,6 +113,7 @@ class FastPacketReassembler:
                         timestamp=buf.start_ts,
                         payload=bytes(buf.payload[:buf.expected_len]),
                         frame_count=buf.frame_count,
+                        frames=buf.contributing_frames,
                     ))
             else:
                 # No matching buffer: normal single-frame message whose first
@@ -118,6 +124,7 @@ class FastPacketReassembler:
                     timestamp=msg.timestamp,
                     payload=bytes(msg.data[:msg.dlc]),
                     frame_count=1,
+                    frames=[msg],
                 ))
 
         return results

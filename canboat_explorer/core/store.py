@@ -101,15 +101,22 @@ class DataStore:
             priority = n2k.priority
             is_n2k   = True
 
+        decoded = self._n2k_decoder.decode(msg) if is_n2k else None
+
         for n2k_msg in self._fp.feed(msg):
             self.n2k_messages.append(n2k_msg)
             if not n2k_msg.is_complete:
                 self._incomplete_fp_pgns.add(n2k_msg.pgn)
-            elif n2k_msg.frame_count > 1:
-                self._complete_fp_pgns.add(n2k_msg.pgn)
+                # n2k_msg.decoded stays False — current `decoded` is for `msg`,
+                # not for this stale-flushed message from a prior sequence.
+            else:
+                if n2k_msg.frame_count > 1:
+                    self._complete_fp_pgns.add(n2k_msg.pgn)
+                n2k_msg.decoded = decoded is not None
+            for frame in n2k_msg.frames:
+                frame.n2k_msg = n2k_msg
 
         if is_n2k:
-            decoded = self._n2k_decoder.decode(msg)
             if decoded is None:
                 if pgn not in self._unknown_pgns:
                     self._unknown_pgns.add(pgn)
