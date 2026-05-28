@@ -1,0 +1,21 @@
+v0.9
+Initial Average Viable Product
+
+v1.0.0
+ - Big Refactor of the data store
+ - Warnings are no longer PGN specific but per frame/message in that layer. Warnings are now also shown on tabs.
+ - Speed improvements when working with large datasets and loading them
+
+v1.0.1
+ - Save settings file next to .exe file after frozen build
+
+---- UPCOMING CHANGES: -----
+v1.1
+ - add bus utilization indication and messages/sec
+ - show message backlog when paused
+
+When andromeda is here:
+ - add filters
+ - tab4: left pane show summary value. And right pane should have insight to show bit value matching, like canboat visualizer.
+ - Sending n2k messages
+ - Add NMEA0183 messages (with different interface)
