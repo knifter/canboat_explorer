@@ -119,16 +119,60 @@ class NetworkTab(QWidget):
             if s == sa
         }
 
-    def _collision_pgns(self) -> set[int]:
-        pgn_sas: dict[int, set[int]] = {}
+    def _observed_pgn_to_sas(self) -> dict[int, set[int]]:
+        result: dict[int, set[int]] = {}
         for pgn, sa in self._store.by_pgn_sa:
-            pgn_sas.setdefault(pgn, set()).add(sa)
-        return {pgn for pgn, sas in pgn_sas.items() if len(sas) > 1}
+            result.setdefault(pgn, set()).add(sa)
+        return result
+
+    def _tx_pgn_to_sas(self) -> dict[int, set[int]]:
+        """For each PGN, the set of SAs that advertise it in their TX list (PGN 126464)."""
+        result: dict[int, set[int]] = {}
+        for sa in self._all_sa():
+            tx, _ = self._get_pgn_lists(sa)
+            for pgn in tx:
+                result.setdefault(pgn, set()).add(sa)
+        return result
+
+    def _collision_pgns(self) -> set[int]:
+        """PGNs with potential or actual multi-SA: union of observed and TX-advertised SAs >= 2."""
+        obs = self._observed_pgn_to_sas()
+        tx  = self._tx_pgn_to_sas()
+        out: set[int] = set()
+        for pgn in set(obs) | set(tx):
+            if len(obs.get(pgn, set()) | tx.get(pgn, set())) >= 2:
+                out.add(pgn)
+        return out
+
+    def _variant_collision_pgns(self) -> set[int]:
+        """PGNs decoded as different manufacturer variants across SAs.
+        Stronger signal than plain multi-SA — symptom of an SA address collision."""
+        pgn_descs: dict[int, set[str]] = {}
+        for (pgn, _), desc in self._store.pgn_sa_names.items():
+            pgn_descs.setdefault(pgn, set()).add(desc)
+        return {pgn for pgn, descs in pgn_descs.items() if len(descs) > 1}
 
     def _collision_tooltip(self, pgn: int) -> str:
-        sas = sorted(s for (p, s) in self._store.by_pgn_sa if p == pgn)
-        sa_list = ", ".join(f"SA:{s}" for s in sas)
-        return f"PGN {pgn}: transmitted by multiple source addresses ({sa_list})"
+        name     = pgn_name(pgn)
+        pgn_ref  = f"PGN {pgn} ({name})" if name else f"PGN {pgn}"
+        observed = sorted(s for (p, s) in self._store.by_pgn_sa if p == pgn)
+        variants = sorted({
+            desc for (p, _), desc in self._store.pgn_sa_names.items() if p == pgn
+        })
+
+        if len(variants) > 1:
+            sa_list = ", ".join(f"SA:{s}" for s in observed)
+            return (f"{pgn_ref}: SA address collision — different device variants "
+                    f"across {sa_list}: {', '.join(variants)}")
+
+        if len(observed) >= 2:
+            sa_list = ", ".join(f"SA:{s}" for s in observed)
+            return f"{pgn_ref}: transmitted by multiple source addresses ({sa_list})"
+
+        advertised = self._tx_pgn_to_sas().get(pgn, set())
+        union      = sorted(set(observed) | advertised)
+        sa_list    = ", ".join(f"SA:{s}" for s in union)
+        return f"{pgn_ref}: might be transmitted by multiple source addresses ({sa_list})"
 
     def _get_model_name(self, sa: int) -> str | None:
         dq = self._store.decoded_by_key.get((126996, sa, ()))
