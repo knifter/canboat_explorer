@@ -1,5 +1,5 @@
 """
-Application settings backed by an .ini file next to the project root.
+Application settings backed by an .ini file next to the application.
 
 Settings are written back to disk on every change so they survive crashes.
 Defaults are applied when the file does not exist or a key is missing.
@@ -7,10 +7,18 @@ Defaults are applied when the file does not exist or a key is missing.
 from __future__ import annotations
 
 import configparser
+import sys
 from pathlib import Path
 
-# Two levels up from canboat_explorer/core/ → project root
-_APP_DIR  = Path(__file__).resolve().parents[2]
+# Application directory:
+# - PyInstaller frozen build: directory of the executable (sys.executable points
+#   to the .exe; __file__ would point into the transient _MEIPASS extraction dir)
+# - Running from source: two levels up from canboat_explorer/core/ → project root
+if getattr(sys, "frozen", False):
+    _APP_DIR = Path(sys.executable).resolve().parent
+else:
+    _APP_DIR = Path(__file__).resolve().parents[2]
+
 _INI_PATH = _APP_DIR / "canboat_explorer.ini"
 
 _DEFAULTS: dict[str, dict[str, str]] = {
