@@ -10,9 +10,9 @@ from PyQt6.QtWidgets import (
     QPushButton, QStatusBar, QStyle, QTabWidget, QToolBar, QWidget,
 )
 
-import can
 from canboat_explorer.bus.can_reader import CanReader
 from canboat_explorer.core.paths import data_dir
+from canboat_explorer.core.raw_frame import RawFrame
 from canboat_explorer.core.session_log import SessionLog
 from canboat_explorer.core.settings import settings
 from canboat_explorer.core.store import DataStore
@@ -32,7 +32,7 @@ class MainWindow(QMainWindow):
         self.resize(1200, 700)
 
         self._reader: CanReader | None = None
-        self._frame_queue: queue.Queue[can.Message] = queue.Queue()
+        self._frame_queue: queue.Queue[RawFrame] = queue.Queue()
         self._session_path = data_dir() / "session.canlog"
 
         self._init_store()
@@ -197,7 +197,7 @@ class MainWindow(QMainWindow):
             return
         if self._frame_queue.empty():
             return
-        batch: list[can.Message] = []
+        batch: list[RawFrame] = []
         try:
             while True:
                 batch.append(self._frame_queue.get_nowait())

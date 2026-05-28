@@ -11,6 +11,8 @@ import time
 
 import can
 
+from canboat_explorer.core.raw_frame import RawFrame
+
 log = logging.getLogger(__name__)
 
 
@@ -26,7 +28,7 @@ class CanReader(threading.Thread):
         self,
         interface: str,
         channel: str | int,
-        frame_queue: queue.Queue[can.Message],
+        frame_queue: queue.Queue[RawFrame],
         serial_baud: int = 2_000_000,
         can_baud: int = 250_000,
     ) -> None:
@@ -100,7 +102,7 @@ class CanReader(threading.Thread):
                     self._ts_offset = time.time() - msg.timestamp
                 msg.timestamp += self._ts_offset
 
-                self.frame_queue.put(msg)
+                self.frame_queue.put(RawFrame.wrap(msg))
         finally:
             bus.shutdown()
 

@@ -42,6 +42,11 @@ class NetworkTab(QWidget):
         self._last_decoded_len = 0
         self._log_processed    = 0
 
+        # Caches populated by _rebuild_tree(), read by has_warnings() and
+        # _collision_tooltip() between rebuilds.
+        self._collisions: set[int]            = set()
+        self._tx_by_pgn:  dict[int, set[int]] = {}
+
         splitter = QSplitter(Qt.Orientation.Vertical)
 
         self._tree = QTreeWidget()
@@ -89,9 +94,11 @@ class NetworkTab(QWidget):
         self._last_n2k_count   = 0
         self._last_decoded_len = 0
         self._log_processed    = 0
+        self._collisions.clear()
+        self._tx_by_pgn.clear()
 
     def has_warnings(self) -> bool:
-        return bool(self._collision_pgns())
+        return bool(self._collisions)
 
     # ------------------------------------------------------------------
     # Data helpers
@@ -119,31 +126,6 @@ class NetworkTab(QWidget):
             if s == sa
         }
 
-    def _observed_pgn_to_sas(self) -> dict[int, set[int]]:
-        result: dict[int, set[int]] = {}
-        for pgn, sa in self._store.by_pgn_sa:
-            result.setdefault(pgn, set()).add(sa)
-        return result
-
-    def _tx_pgn_to_sas(self) -> dict[int, set[int]]:
-        """For each PGN, the set of SAs that advertise it in their TX list (PGN 126464)."""
-        result: dict[int, set[int]] = {}
-        for sa in self._all_sa():
-            tx, _ = self._get_pgn_lists(sa)
-            for pgn in tx:
-                result.setdefault(pgn, set()).add(sa)
-        return result
-
-    def _collision_pgns(self) -> set[int]:
-        """PGNs with potential or actual multi-SA: union of observed and TX-advertised SAs >= 2."""
-        obs = self._observed_pgn_to_sas()
-        tx  = self._tx_pgn_to_sas()
-        out: set[int] = set()
-        for pgn in set(obs) | set(tx):
-            if len(obs.get(pgn, set()) | tx.get(pgn, set())) >= 2:
-                out.add(pgn)
-        return out
-
     def _collision_tooltip(self, pgn: int) -> str:
         name     = pgn_name(pgn)
         pgn_ref  = f"PGN {pgn} ({name})" if name else f"PGN {pgn}"
@@ -161,7 +143,7 @@ class NetworkTab(QWidget):
             sa_list = ", ".join(f"SA:{s}" for s in observed)
             return f"{pgn_ref}: transmitted by multiple source addresses ({sa_list})"
 
-        advertised = self._tx_pgn_to_sas().get(pgn, set())
+        advertised = self._tx_by_pgn.get(pgn, set())
         union      = sorted(set(observed) | advertised)
         sa_list    = ", ".join(f"SA:{s}" for s in union)
         return f"{pgn_ref}: might be transmitted by multiple source addresses ({sa_list})"
@@ -239,10 +221,34 @@ class NetworkTab(QWidget):
 
     def _rebuild_tree(self) -> None:
         self._tree.clear()
-        now        = time.time()
-        collisions = self._collision_pgns()
+        now      = time.time()
+        all_sa   = self._all_sa()
 
-        for sa in self._all_sa():
+        # Per-SA TX/RX lists (decoded from PGN 126464) — computed once, reused below.
+        pgn_lists = {sa: self._get_pgn_lists(sa) for sa in all_sa}
+
+        # Invert TX advertisements: pgn → set of SAs that advertise it.
+        tx_by_pgn: dict[int, set[int]] = {}
+        for sa, (tx, _) in pgn_lists.items():
+            for pgn in tx:
+                tx_by_pgn.setdefault(pgn, set()).add(sa)
+
+        # Observed transmitters: pgn → set of SAs actually seen sending it.
+        obs_by_pgn: dict[int, set[int]] = {}
+        for pgn, sa in self._store.by_pgn_sa:
+            obs_by_pgn.setdefault(pgn, set()).add(sa)
+
+        # Collision = potential or actual multi-SA (union ≥ 2).
+        collisions = {
+            pgn for pgn in (set(obs_by_pgn) | set(tx_by_pgn))
+            if len(obs_by_pgn.get(pgn, set()) | tx_by_pgn.get(pgn, set())) >= 2
+        }
+
+        # Stash for has_warnings() and _collision_tooltip() between rebuilds.
+        self._collisions = collisions
+        self._tx_by_pgn  = tx_by_pgn
+
+        for sa in all_sa:
             has_ac     = (60928, sa, ()) in self._store.decoded_by_key
             last_ts    = self._last_seen_ts(sa)
             stale      = last_ts > 0 and (now - last_ts) > _STALE_S
@@ -278,7 +284,8 @@ class NetworkTab(QWidget):
 
             observed = self._observed_pgns(sa)
             if has_ac:
-                self._build_identified_children(sa_item, sa, observed, collisions)
+                tx_pgns, rx_pgns = pgn_lists[sa]
+                self._build_identified_children(sa_item, sa, observed, collisions, tx_pgns, rx_pgns)
             else:
                 self._build_seen_only_children(sa_item, sa, observed, collisions)
 
@@ -287,8 +294,8 @@ class NetworkTab(QWidget):
     def _build_identified_children(
         self, sa_item: QTreeWidgetItem, sa: int,
         observed: dict[int, int], collisions: set[int],
+        tx_pgns: list[int], rx_pgns: list[int],
     ) -> None:
-        tx_pgns, rx_pgns = self._get_pgn_lists(sa)
         tx_set  = set(tx_pgns)
         rx_set  = set(rx_pgns)
         obs_set = set(observed.keys())

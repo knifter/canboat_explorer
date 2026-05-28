@@ -12,7 +12,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-import can
 from nmea2000.decoder import NMEA2000Decoder
 
 from canboat_explorer.core.fast_packet import FastPacketReassembler, N2KMessage
@@ -72,9 +71,8 @@ class DataStore:
     # Ingestion
     # ------------------------------------------------------------------
 
-    def ingest(self, msg: can.Message) -> None:
+    def ingest(self, raw: RawFrame) -> None:
         """Append one frame from live capture: write to log + update memory."""
-        raw = RawFrame.wrap(msg)
         self.log.append(raw)
         self._add(raw)
 
@@ -91,15 +89,10 @@ class DataStore:
 
         n2k = n2k_frame_info(msg)
         if n2k is None:
-            pgn = sa = 0
-            is_n2k = False
             self.oob_frame_count += 1
+            decoded = None
         else:
-            pgn    = n2k.pgn
-            sa     = n2k.sa
-            is_n2k = True
-
-        decoded = self._n2k_decoder.decode(msg) if is_n2k else None
+            decoded = self._n2k_decoder.decode(msg)
 
         for n2k_msg in self._fp.feed(msg):
             self.n2k_messages.append(n2k_msg)
@@ -114,7 +107,7 @@ class DataStore:
             for frame in n2k_msg.frames:
                 frame.n2k_msg = n2k_msg
 
-        if is_n2k and decoded is not None:
+        if decoded is not None:
             qualifier = tuple(sorted(
                 (f.id, f.raw_value)
                 for f in decoded.fields
@@ -135,8 +128,8 @@ class DataStore:
             entry.last_frame = msg
             entry.count += 1
 
-        if is_n2k:
-            key = (pgn, sa)
+        if n2k is not None:
+            key = (n2k.pgn, n2k.sa)
             entry = self.by_pgn_sa.get(key)
             if entry is None:
                 self.by_pgn_sa[key] = AccumEntry(msg, 1)
@@ -144,9 +137,9 @@ class DataStore:
                 entry.last_frame = msg
                 entry.count += 1
 
-            entry = self.by_pgn.get(pgn)
+            entry = self.by_pgn.get(n2k.pgn)
             if entry is None:
-                self.by_pgn[pgn] = AccumEntry(msg, 1)
+                self.by_pgn[n2k.pgn] = AccumEntry(msg, 1)
             else:
                 entry.last_frame = msg
                 entry.count += 1
