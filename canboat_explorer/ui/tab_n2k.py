@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from PyQt6.QtCore import QAbstractTableModel, QModelIndex, Qt
+from PyQt6.QtCore import QAbstractTableModel, QModelIndex, Qt, QTimer
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QHBoxLayout, QLabel, QPushButton, QTableView, QVBoxLayout, QWidget,
@@ -237,7 +237,9 @@ class N2KTab(QWidget):
         self._view = QTableView()
         self._view.setModel(self._time_model)
         hdr = self._view.horizontalHeader()
-        hdr.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setResizeContentsPrecision(50)
+        hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        QTimer.singleShot(0, self._enable_autosize)
         self._view.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
         self._view.setEditTriggers(QTableView.EditTrigger.NoEditTriggers)
         self._view.verticalHeader().setVisible(False)
@@ -257,6 +259,10 @@ class N2KTab(QWidget):
         layout.setContentsMargins(0, 4, 0, 0)
         layout.addLayout(top)
         layout.addWidget(self._view)
+
+    def _enable_autosize(self) -> None:
+        hdr = self._view.horizontalHeader()
+        hdr.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
 
     def _toggle_mode(self, checked: bool) -> None:
         if checked:
