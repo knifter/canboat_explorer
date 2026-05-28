@@ -133,6 +133,9 @@ class DecodedTab(QWidget):
         self._table.setRowCount(0)
         self._hdr_label.setText("")
 
+    def has_warnings(self) -> bool:
+        return False
+
     # ------------------------------------------------------------------
     # Tree management
     # ------------------------------------------------------------------

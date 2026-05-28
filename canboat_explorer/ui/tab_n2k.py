@@ -91,10 +91,10 @@ class N2KTimeViewModel(QAbstractTableModel):
             if col == 7: return str(msg.frame_count)
             return None
 
-        flag = self._store.get_flag_by_pgn(msg.pgn)
+        flag = _flag_for_message(self._store, msg)
 
         if role == Qt.ItemDataRole.ToolTipRole:
-            reason = self._store.get_flag_reason(msg.pgn)
+            reason = _reason_for_message(msg)
             if reason:
                 return reason
 
@@ -112,6 +112,25 @@ class N2KTimeViewModel(QAbstractTableModel):
 
     def refresh(self) -> None:
         self.layoutChanged.emit()
+
+
+def _flag_for_message(store: DataStore, msg: N2KMessage) -> Priority:
+    f = store.get_user_flag_by_pgn(msg.pgn)
+    if f:
+        return f
+    if not msg.is_complete:
+        return "error"
+    if not msg.decoded:
+        return "warning"
+    return None
+
+
+def _reason_for_message(msg: N2KMessage) -> str:
+    if not msg.is_complete:
+        return f"PGN {msg.pgn}: incomplete fast-packet sequence (timed out before all frames arrived)"
+    if not msg.decoded:
+        return f"PGN {msg.pgn}: nmea2000 decoder could not parse the payload"
+    return ""
 
 
 class N2KAccumViewModel(QAbstractTableModel):
@@ -169,10 +188,10 @@ class N2KAccumViewModel(QAbstractTableModel):
                 return f"{elapsed / (count - 1) * 1000:.0f} ms"
             return None
 
-        flag = self._store.get_flag_by_pgn(msg.pgn)
+        flag = _flag_for_message(self._store, msg)
 
         if role == Qt.ItemDataRole.ToolTipRole:
-            reason = self._store.get_flag_reason(msg.pgn)
+            reason = _reason_for_message(msg)
             if reason:
                 return reason
 
@@ -270,3 +289,6 @@ class N2KTab(QWidget):
         self._time_model.refresh()
         self._accum_model.reset()
         self._update_count()
+
+    def has_warnings(self) -> bool:
+        return (self._store.incomplete_msg_count + self._store.undecoded_msg_count) > 0

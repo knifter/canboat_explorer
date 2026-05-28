@@ -66,6 +66,11 @@ class DataStore:
         self._complete_fp_pgns:   set[int] = set()
         self.pgn_sa_names: dict[tuple[int, int], str] = {}
 
+        # Tab-header warning counters (auto-flag totals, not user flags)
+        self.oob_frame_count:      int = 0  # out-of-band: frames that won't link to any N2KMessage
+        self.incomplete_msg_count: int = 0  # N2KMessages emitted with is_complete=False
+        self.undecoded_msg_count:  int = 0  # complete N2KMessages whose decode returned None
+
         # JSON-serialisable flag dict; keys are "a:<arb_id>" or "p:<pgn>"
         self._flags: dict[str, str] = {}
         self._load_sidecar()
@@ -95,6 +100,7 @@ class DataStore:
         if n2k is None:
             pgn = sa = priority = 0
             is_n2k = False
+            self.oob_frame_count += 1
         else:
             pgn      = n2k.pgn
             sa       = n2k.sa
@@ -107,12 +113,15 @@ class DataStore:
             self.n2k_messages.append(n2k_msg)
             if not n2k_msg.is_complete:
                 self._incomplete_fp_pgns.add(n2k_msg.pgn)
+                self.incomplete_msg_count += 1
                 # n2k_msg.decoded stays False — current `decoded` is for `msg`,
                 # not for this stale-flushed message from a prior sequence.
             else:
                 if n2k_msg.frame_count > 1:
                     self._complete_fp_pgns.add(n2k_msg.pgn)
                 n2k_msg.decoded = decoded is not None
+                if not n2k_msg.decoded:
+                    self.undecoded_msg_count += 1
             for frame in n2k_msg.frames:
                 frame.n2k_msg = n2k_msg
 
@@ -175,6 +184,12 @@ class DataStore:
 
     def pgn_sa_name(self, pgn: int, sa: int) -> str:
         return self.pgn_sa_names.get((pgn, sa)) or pgn_name(pgn)
+
+    def get_user_flag_by_arb(self, arb_id: int) -> Priority:
+        return self._flags.get(f"a:{arb_id}")  # type: ignore[return-value]
+
+    def get_user_flag_by_pgn(self, pgn: int) -> Priority:
+        return self._flags.get(f"p:{pgn}")  # type: ignore[return-value]
 
     def get_flag_by_arb(self, arb_id: int) -> Priority:
         user = self._flags.get(f"a:{arb_id}")
@@ -260,6 +275,9 @@ class DataStore:
         self._incomplete_fp_pgns.clear()
         self._complete_fp_pgns.clear()
         self.pgn_sa_names.clear()
+        self.oob_frame_count = 0
+        self.incomplete_msg_count = 0
+        self.undecoded_msg_count = 0
 
     def clear(self) -> None:
         """Archive the current log, reset in-memory state, start fresh."""

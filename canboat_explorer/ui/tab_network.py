@@ -90,6 +90,9 @@ class NetworkTab(QWidget):
         self._last_decoded_len = 0
         self._log_processed    = 0
 
+    def has_warnings(self) -> bool:
+        return bool(self._collision_pgns())
+
     # ------------------------------------------------------------------
     # Data helpers
     # ------------------------------------------------------------------
@@ -121,6 +124,11 @@ class NetworkTab(QWidget):
         for pgn, sa in self._store.by_pgn_sa:
             pgn_sas.setdefault(pgn, set()).add(sa)
         return {pgn for pgn, sas in pgn_sas.items() if len(sas) > 1}
+
+    def _collision_tooltip(self, pgn: int) -> str:
+        sas = sorted(s for (p, s) in self._store.by_pgn_sa if p == pgn)
+        sa_list = ", ".join(f"SA:{s}" for s in sas)
+        return f"PGN {pgn}: transmitted by multiple source addresses ({sa_list})"
 
     def _get_model_name(self, sa: int) -> str | None:
         dq = self._store.decoded_by_key.get((126996, sa, ()))
@@ -236,7 +244,7 @@ class NetworkTab(QWidget):
             if has_ac:
                 self._build_identified_children(sa_item, sa, observed, collisions)
             else:
-                self._build_seen_only_children(sa_item, sa, observed)
+                self._build_seen_only_children(sa_item, sa, observed, collisions)
 
             sa_item.setExpanded(True)
 
@@ -259,6 +267,8 @@ class NetworkTab(QWidget):
                 )
                 if pgn not in observed:
                     child.setForeground(1, QBrush(_STALE_FG))
+                if pgn in collisions:
+                    child.setToolTip(0, self._collision_tooltip(pgn))
                 tx_hdr.addChild(child)
             tx_hdr.setExpanded(True)
 
@@ -278,14 +288,18 @@ class NetworkTab(QWidget):
             ua_hdr = self._section_item(ua_label)
             sa_item.addChild(ua_hdr)
             for pgn in sorted(unadvertised):
+                prefix = "⚠ " if pgn in collisions else "    "
                 child = QTreeWidgetItem(
-                    ["    " + _pgn_label(pgn), self._obs_status(pgn, sa, observed)]
+                    [prefix + _pgn_label(pgn), self._obs_status(pgn, sa, observed)]
                 )
+                if pgn in collisions:
+                    child.setToolTip(0, self._collision_tooltip(pgn))
                 ua_hdr.addChild(child)
             ua_hdr.setExpanded(True)
 
     def _build_seen_only_children(
-        self, sa_item: QTreeWidgetItem, sa: int, observed: dict[int, int]
+        self, sa_item: QTreeWidgetItem, sa: int,
+        observed: dict[int, int], collisions: set[int],
     ) -> None:
         visible = {pgn: cnt for pgn, cnt in observed.items() if pgn not in _MGMT_PGNS}
         if not visible:
@@ -293,7 +307,10 @@ class NetworkTab(QWidget):
         hdr = self._section_item(f"Observed PGNs ({len(visible)})")
         sa_item.addChild(hdr)
         for pgn in sorted(visible):
-            child = QTreeWidgetItem(["    " + _pgn_label(pgn), self._obs_status(pgn, sa, observed)])
+            prefix = "⚠ " if pgn in collisions else "    "
+            child = QTreeWidgetItem([prefix + _pgn_label(pgn), self._obs_status(pgn, sa, observed)])
+            if pgn in collisions:
+                child.setToolTip(0, self._collision_tooltip(pgn))
             hdr.addChild(child)
         hdr.setExpanded(True)
 

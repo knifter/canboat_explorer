@@ -48,6 +48,7 @@ class MainWindow(QMainWindow):
         self._tab_n2k.on_messages_added()
         self._tab_network.on_messages_added()
         self._tab_decoded.on_messages_added()
+        self._update_tab_warnings()
 
     # ------------------------------------------------------------------
     # Store / session log
@@ -146,17 +147,26 @@ class MainWindow(QMainWindow):
     # Tabs
     # ------------------------------------------------------------------
 
+    _TAB_NAMES = ("Raw CAN", "NMEA 2000", "Network", "Decoded Values")
+
     def _build_tabs(self) -> None:
         self._tabs = QTabWidget()
         self._tab_raw     = RawCanTab(self._store)
         self._tab_n2k     = N2KTab(self._store)
         self._tab_network = NetworkTab(self._store)
         self._tab_decoded = DecodedTab(self._store)
-        self._tabs.addTab(self._tab_raw,     "Raw CAN")
-        self._tabs.addTab(self._tab_n2k,     "NMEA 2000")
-        self._tabs.addTab(self._tab_network, "Network")
-        self._tabs.addTab(self._tab_decoded, "Decoded Values")
+        self._tabs.addTab(self._tab_raw,     self._TAB_NAMES[0])
+        self._tabs.addTab(self._tab_n2k,     self._TAB_NAMES[1])
+        self._tabs.addTab(self._tab_network, self._TAB_NAMES[2])
+        self._tabs.addTab(self._tab_decoded, self._TAB_NAMES[3])
         self.setCentralWidget(self._tabs)
+
+    def _update_tab_warnings(self) -> None:
+        tabs = (self._tab_raw, self._tab_n2k, self._tab_network, self._tab_decoded)
+        for idx, (tab, name) in enumerate(zip(tabs, self._TAB_NAMES)):
+            label = f"⚠ {name}" if tab.has_warnings() else name
+            if self._tabs.tabText(idx) != label:
+                self._tabs.setTabText(idx, label)
 
     # ------------------------------------------------------------------
     # Status bar
@@ -199,6 +209,7 @@ class MainWindow(QMainWindow):
         self._tab_n2k.on_messages_added()
         self._tab_network.on_messages_added()
         self._tab_decoded.on_messages_added()
+        self._update_tab_warnings()
 
     # ------------------------------------------------------------------
     # File actions
@@ -223,6 +234,7 @@ class MainWindow(QMainWindow):
         self._tab_network.on_messages_added()
         self._tab_decoded.reset()
         self._tab_decoded.on_messages_added()
+        self._update_tab_warnings()
 
     def _action_save(self) -> None:
         path_str, _ = QFileDialog.getSaveFileName(
@@ -251,6 +263,7 @@ class MainWindow(QMainWindow):
         self._tab_n2k.reset()
         self._tab_network.reset()
         self._tab_decoded.reset()
+        self._update_tab_warnings()
         self._update_title()
 
     def _action_settings(self) -> None:

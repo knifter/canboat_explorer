@@ -140,10 +140,8 @@ class TimeViewModel(QAbstractTableModel):
             return None
 
         if role == Qt.ItemDataRole.ToolTipRole:
-            if n2k:
-                reason = self._store.get_flag_reason(n2k.pgn)
-                if reason:
-                    return reason
+            if frame.n2k_msg is None:
+                return "Frame did not participate in any assembled NMEA 2000 message (out-of-band)"
 
         if role == Qt.ItemDataRole.ForegroundRole:
             flag = self._flag_for(frame, n2k)
@@ -161,10 +159,15 @@ class TimeViewModel(QAbstractTableModel):
 
     def _flag_for(self, frame, n2k) -> Priority:
         if n2k is not None:
-            f = self._store.get_flag_by_pgn(n2k.pgn)
+            f = self._store.get_user_flag_by_pgn(n2k.pgn)
             if f:
                 return f
-        return self._store.get_flag_by_arb(frame.arbitration_id)
+        f = self._store.get_user_flag_by_arb(frame.arbitration_id)
+        if f:
+            return f
+        if frame.n2k_msg is None:
+            return "warning"
+        return None
 
     def refresh(self) -> None:
         self.layoutChanged.emit()
@@ -243,10 +246,8 @@ class AccumViewModel(QAbstractTableModel):
                 return f"{ms:.0f} ms" if ms is not None else "—"
 
         if role == Qt.ItemDataRole.ToolTipRole:
-            if n2k:
-                reason = self._store.get_flag_reason(n2k.pgn)
-                if reason:
-                    return reason
+            if f.n2k_msg is None:
+                return "Last frame did not participate in any assembled NMEA 2000 message (out-of-band)"
 
         if role == Qt.ItemDataRole.ForegroundRole:
             flag = self._flag_for(f, n2k)
@@ -263,10 +264,15 @@ class AccumViewModel(QAbstractTableModel):
 
     def _flag_for(self, frame, n2k) -> Priority:
         if n2k is not None:
-            f = self._store.get_flag_by_pgn(n2k.pgn)
+            f = self._store.get_user_flag_by_pgn(n2k.pgn)
             if f:
                 return f
-        return self._store.get_flag_by_arb(frame.arbitration_id)
+        f = self._store.get_user_flag_by_arb(frame.arbitration_id)
+        if f:
+            return f
+        if frame.n2k_msg is None:
+            return "warning"
+        return None
 
     def refresh(self) -> None:
         self.layoutChanged.emit()
@@ -372,3 +378,6 @@ class RawCanTab(QWidget):
         self._update_count()
         if model is self._time_model:
             self._view.scrollToTop()
+
+    def has_warnings(self) -> bool:
+        return self._store.oob_frame_count > 0
