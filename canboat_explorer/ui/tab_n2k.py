@@ -6,7 +6,7 @@ from typing import Any
 from PyQt6.QtCore import QAbstractTableModel, QModelIndex, Qt, QTimer
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
-    QHBoxLayout, QLabel, QPushButton, QTableView, QVBoxLayout, QWidget,
+    QComboBox, QHBoxLayout, QLabel, QTableView, QVBoxLayout, QWidget,
     QHeaderView,
 )
 
@@ -41,6 +41,9 @@ _COLS_ACCUM: list[tuple[str, str]] = [
     ("Count",        "Number of messages received for this PGN + SA combination."),
     ("Interval",     "Average interval between messages (ms) = (last − first) / (count − 1).\nRequires at least 2 messages."),
 ]
+
+_GROUP_OPTIONS = ["None", "PGN + SA"]
+# Index 0 = time view (no grouping); 1 = accumulated by PGN + SA
 
 
 def _fmt_time(ts: float) -> str:
@@ -244,14 +247,15 @@ class N2KTab(QWidget):
         self._view.setEditTriggers(QTableView.EditTrigger.NoEditTriggers)
         self._view.verticalHeader().setVisible(False)
 
-        self._btn = QPushButton("Accumulated view")
-        self._btn.setCheckable(True)
-        self._btn.toggled.connect(self._toggle_mode)
+        self._group_combo = QComboBox()
+        self._group_combo.addItems(_GROUP_OPTIONS)
+        self._group_combo.currentIndexChanged.connect(self._on_group_selected)
 
         self._count_label = QLabel("0 messages")
 
         top = QHBoxLayout()
-        top.addWidget(self._btn)
+        top.addWidget(QLabel("Group by:"))
+        top.addWidget(self._group_combo)
         top.addStretch()
         top.addWidget(self._count_label)
 
@@ -260,18 +264,20 @@ class N2KTab(QWidget):
         layout.addLayout(top)
         layout.addWidget(self._view)
 
+        # Default selection: group-by first option. Fires _on_group_selected,
+        # which swaps the view model to accum.
+        self._group_combo.setCurrentIndex(1)
+
     def _enable_autosize(self) -> None:
         hdr = self._view.horizontalHeader()
         hdr.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
 
-    def _toggle_mode(self, checked: bool) -> None:
-        if checked:
+    def _on_group_selected(self, index: int) -> None:
+        if index == 0:
+            self._view.setModel(self._time_model)
+        else:
             self._accum_model.refresh()
             self._view.setModel(self._accum_model)
-            self._btn.setText("Time view")
-        else:
-            self._view.setModel(self._time_model)
-            self._btn.setText("Accumulated view")
         self._update_count()
 
     def _update_count(self) -> None:

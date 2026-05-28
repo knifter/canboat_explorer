@@ -8,7 +8,7 @@ from PyQt6.QtCore import (
 )
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
-    QComboBox, QHBoxLayout, QLabel, QPushButton, QTableView, QVBoxLayout, QWidget,
+    QComboBox, QHBoxLayout, QLabel, QTableView, QVBoxLayout, QWidget,
     QHeaderView,
 )
 
@@ -173,7 +173,8 @@ class TimeViewModel(QAbstractTableModel):
         self.layoutChanged.emit()
 
 
-_GROUP_MODES = ["by Arb ID", "by PGN + SA", "by PGN"]
+_GROUP_OPTIONS = ["None", "Arb ID", "PGN + SA", "PGN"]
+# Index 0 = time view (no grouping); 1+ map to AccumViewModel.set_mode(index-1)
 
 
 class AccumViewModel(QAbstractTableModel):
@@ -300,19 +301,14 @@ class RawCanTab(QWidget):
         self._view.setEditTriggers(QTableView.EditTrigger.NoEditTriggers)
         self._view.verticalHeader().setVisible(False)
 
-        self._btn = QPushButton("Accumulated view")
-        self._btn.setCheckable(True)
-        self._btn.toggled.connect(self._toggle_mode)
-
         self._group_combo = QComboBox()
-        self._group_combo.addItems(_GROUP_MODES)
-        self._group_combo.setEnabled(False)
-        self._group_combo.currentIndexChanged.connect(self._on_group_changed)
+        self._group_combo.addItems(_GROUP_OPTIONS)
+        self._group_combo.currentIndexChanged.connect(self._on_group_selected)
 
         self._count_label = QLabel("0 frames")
 
         top = QHBoxLayout()
-        top.addWidget(self._btn)
+        top.addWidget(QLabel("Group by:"))
         top.addWidget(self._group_combo)
         top.addStretch()
         top.addWidget(self._count_label)
@@ -322,17 +318,15 @@ class RawCanTab(QWidget):
         layout.addLayout(top)
         layout.addWidget(self._view)
 
-    def _toggle_mode(self, checked: bool) -> None:
-        if checked:
-            self._view.setModel(self._accum_model)
-            self._btn.setText("Time view")
-            self._group_combo.setEnabled(True)
-            self._pin_sep(_SEP_COL_ACCUM)
-        else:
+    def _on_group_selected(self, index: int) -> None:
+        self._min_col_widths.clear()
+        if index == 0:
             self._view.setModel(self._time_model)
-            self._btn.setText("Accumulated view")
-            self._group_combo.setEnabled(False)
             self._pin_sep(_SEP_COL)
+        else:
+            self._accum_model.set_mode(index - 1)
+            self._view.setModel(self._accum_model)
+            self._pin_sep(_SEP_COL_ACCUM)
         self._update_count()
 
     def _on_section_resized(self, col: int, _old_size: int, new_size: int) -> None:
@@ -344,12 +338,6 @@ class RawCanTab(QWidget):
             hdr.blockSignals(True)
             self._view.setColumnWidth(col, minimum)
             hdr.blockSignals(False)
-
-    def _on_group_changed(self, index: int) -> None:
-        self._min_col_widths.clear()
-        self._accum_model.set_mode(index)
-        self._pin_sep(_SEP_COL_ACCUM)
-        self._update_count()
 
     def _pin_sep(self, col: int) -> None:
         hdr = self._view.horizontalHeader()
