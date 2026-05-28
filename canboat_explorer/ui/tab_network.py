@@ -144,14 +144,6 @@ class NetworkTab(QWidget):
                 out.add(pgn)
         return out
 
-    def _variant_collision_pgns(self) -> set[int]:
-        """PGNs decoded as different manufacturer variants across SAs.
-        Stronger signal than plain multi-SA — symptom of an SA address collision."""
-        pgn_descs: dict[int, set[str]] = {}
-        for (pgn, _), desc in self._store.pgn_sa_names.items():
-            pgn_descs.setdefault(pgn, set()).add(desc)
-        return {pgn for pgn, descs in pgn_descs.items() if len(descs) > 1}
-
     def _collision_tooltip(self, pgn: int) -> str:
         name     = pgn_name(pgn)
         pgn_ref  = f"PGN {pgn} ({name})" if name else f"PGN {pgn}"

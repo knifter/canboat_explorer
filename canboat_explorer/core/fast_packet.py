@@ -17,8 +17,6 @@ from dataclasses import dataclass, field
 from canboat_explorer.core.n2k_frame_info import n2k_frame_info
 from canboat_explorer.core.raw_frame import RawFrame
 
-import can
-
 _STALE_S = 0.010  # 10 ms inter-frame gap → sequence is broken
 
 

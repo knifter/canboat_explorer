@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
 )
 
 from canboat_explorer.core.n2k_frame_info import n2k_frame_info
-from canboat_explorer.core.store import AccumEntry, DataStore, Priority
+from canboat_explorer.core.store import DataStore, Priority
 
 # (header label, tooltip)
 _COLS_TIME: list[tuple[str, str]] = [

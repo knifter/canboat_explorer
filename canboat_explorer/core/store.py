@@ -91,14 +91,13 @@ class DataStore:
 
         n2k = n2k_frame_info(msg)
         if n2k is None:
-            pgn = sa = priority = 0
+            pgn = sa = 0
             is_n2k = False
             self.oob_frame_count += 1
         else:
-            pgn      = n2k.pgn
-            sa       = n2k.sa
-            priority = n2k.priority
-            is_n2k   = True
+            pgn    = n2k.pgn
+            sa     = n2k.sa
+            is_n2k = True
 
         decoded = self._n2k_decoder.decode(msg) if is_n2k else None
 
