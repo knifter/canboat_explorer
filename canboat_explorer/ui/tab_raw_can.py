@@ -30,8 +30,8 @@ _COLS_TIME: list[tuple[str, str]] = [
     ("PGN",     "Parameter Group Number — NMEA 2000 message type.\nOnly present on extended-ID frames.\nDerived from bits 24–8 of the arbitration ID."),
     ("SA",      "Source Address — NMEA 2000 device address (0–253).\nBits 7–0 of the arbitration ID.\nNot a CAN field; part of the NMEA 2000 addressing layer."),
     ("Priority","NMEA 2000 message priority (0 = highest, 7 = lowest).\nBits 28–26 of the arbitration ID.\nNot a CAN field; part of the NMEA 2000 addressing layer."),
-    ("Seq",     "Fast-packet sequence counter (bits 7–5 of byte 0).\nTies CAN frames of the same logical multi-frame message together.\n'—' for non-N2K frames."),
-    ("Frame",   "Fast-packet frame index (bits 4–0 of byte 0).\n0 = first frame, 1+ = continuation frames.\n'—' for non-N2K frames."),
+    ("Seq",     "Fast-packet sequence counter (bits 7–5 of byte 0).\nTies CAN frames of the same logical multi-frame message together.\nEmpty for non-N2K frames."),
+    ("Frame",   "Fast-packet frame index (bits 4–0 of byte 0).\n0 = first frame, 1+ = continuation frames.\nEmpty for non-N2K frames."),
 ]
 
 _COLS_ACCUM: list[tuple[str, str]] = [
@@ -48,8 +48,8 @@ _COLS_ACCUM: list[tuple[str, str]] = [
     ("PGN",       "Parameter Group Number (NMEA 2000 message type). Empty for non-N2K frames."),
     ("SA",        "NMEA 2000 Source Address (0–253). Empty for non-N2K frames."),
     ("Priority",  "NMEA 2000 message priority (0 = highest, 7 = lowest). Empty for non-N2K frames."),
-    ("Seq",       "Fast-packet sequence counter (bits 7–5 of byte 0). '—' for non-N2K frames."),
-    ("Frame",     "Fast-packet frame index (bits 4–0 of byte 0). '—' for non-N2K frames."),
+    ("Seq",       "Fast-packet sequence counter (bits 7–5 of byte 0). Empty for non-N2K frames."),
+    ("Frame",     "Fast-packet frame index (bits 4–0 of byte 0). Empty for non-N2K frames."),
     ("Count",     "Number of frames received with this arbitration ID since the session started."),
     ("Interval",  "Average interval between frames (ms) = (last − first timestamp) / (count − 1).\nRequires at least 2 frames. Converges over time — early readings may be inaccurate."),
 ]
@@ -129,8 +129,8 @@ class TimeViewModel(QAbstractTableModel):
             if col == 10: return f"{n2k.pgn}  {self._store.pgn_sa_name(n2k.pgn, n2k.sa)}" if n2k else ""
             if col == 11: return str(n2k.sa) if n2k else ""
             if col == 12: return str(n2k.priority) if n2k else ""
-            if col == 13: return str(n2k.seq)       if (n2k and n2k.seq       is not None) else "—"
-            if col == 14: return str(n2k.frame_idx) if (n2k and n2k.frame_idx is not None) else "—"
+            if col == 13: return str(n2k.seq)       if (n2k and n2k.seq       is not None) else ""
+            if col == 14: return str(n2k.frame_idx) if (n2k and n2k.frame_idx is not None) else ""
 
         if frame.is_error_frame:
             if role == Qt.ItemDataRole.BackgroundRole:
@@ -246,8 +246,8 @@ class AccumViewModel(QAbstractTableModel):
             if col == 10: return f"{n2k.pgn}  {self._store.pgn_sa_name(n2k.pgn, n2k.sa)}" if n2k else ""
             if col == 11: return str(n2k.sa) if n2k else ""
             if col == 12: return str(n2k.priority) if n2k else ""
-            if col == 13: return str(n2k.seq)       if (n2k and n2k.seq       is not None) else "—"
-            if col == 14: return str(n2k.frame_idx) if (n2k and n2k.frame_idx is not None) else "—"
+            if col == 13: return str(n2k.seq)       if (n2k and n2k.seq       is not None) else ""
+            if col == 14: return str(n2k.frame_idx) if (n2k and n2k.frame_idx is not None) else ""
             if col == 15: return str(entry.count)
             if col == 16:
                 ms = entry.interval_ms
