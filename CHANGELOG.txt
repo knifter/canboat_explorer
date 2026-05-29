@@ -14,7 +14,10 @@ v1.1
  - remember size+position
  - calc and show bus utilization indication, messages/sec, frames/msg in backlog on pause
  - when paused messages are queued in a backlog now, not lost
- 
+
+v1.1.1
+ - fix can.interfaces.* module packaging
+
 ---- UPCOMING CHANGES: -----
 
 When andromeda is here:
