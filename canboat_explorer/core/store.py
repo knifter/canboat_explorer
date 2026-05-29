@@ -97,7 +97,7 @@ _DEVICE_INFO_PGNS = {
 }
 
 # Rolling window (seconds) used by bus_utilization().
-_BUS_WINDOW_S = 5.0
+_BUS_UTILZ_WINDOW_S = 5.0
 
 
 class DataStore:
@@ -330,7 +330,32 @@ class DataStore:
     def pgn_sa_name(self, pgn: int, sa: int) -> str:
         return self.pgn_sa_names.get((pgn, sa)) or pgn_name(pgn)
 
-    def bus_utilization(self, bitrate: int, window_s: float = _BUS_WINDOW_S) -> float | None:
+    def frame_rate(self, window_s: float = _BUS_UTILZ_WINDOW_S) -> float | None:
+        """Frames per second over the last `window_s` seconds. None if no frames."""
+        if not self.frames:
+            return None
+        cutoff = self.frames[-1].timestamp - window_s
+        count  = 0
+        for f in reversed(self.frames):
+            if f.timestamp < cutoff:
+                break
+            count += 1
+        return count / window_s
+
+    def n2k_msg_rate(self, window_s: float = _BUS_UTILZ_WINDOW_S) -> float | None:
+        """Assembled N2K messages per second over the last `window_s` seconds.
+        None if no messages."""
+        if not self.n2k_messages:
+            return None
+        cutoff = self.n2k_messages[-1].timestamp - window_s
+        count  = 0
+        for m in reversed(self.n2k_messages):
+            if m.timestamp < cutoff:
+                break
+            count += 1
+        return count / window_s
+
+    def bus_utilization(self, bitrate: int, window_s: float = _BUS_UTILZ_WINDOW_S) -> float | None:
         """Bus utilization (%) over the last `window_s` seconds of captured frames.
 
         Iterates backwards over `self.frames` from the most recent until the
