@@ -66,6 +66,7 @@ class DecodedTab(QWidget):
         self._pgn_items:  dict[int,         QTreeWidgetItem] = {}
         self._sa_items:   dict[tuple,       QTreeWidgetItem] = {}
         self._leaf_items: dict[tuple,       QTreeWidgetItem] = {}
+        self._leaf_last_ts: dict[tuple, float] = {}   # per-key timestamp of last shown dq[0]
         self._selected_item: QTreeWidgetItem | None = None
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -112,22 +113,30 @@ class DecodedTab(QWidget):
     # ------------------------------------------------------------------
 
     def on_messages_added(self) -> None:
+        any_changed = False
         for key, dq in self._store.decoded_by_key.items():
             if not dq:
                 continue
+            head_ts = dq[0].timestamp
+            if self._leaf_last_ts.get(key) == head_ts:
+                continue   # this stream got no new message since the last drain
             if key not in self._leaf_items:
                 self._create_entry(key, dq[0])
             leaf = self._leaf_items[key]
             leaf.setText(1, _rate_label(dq))
             if leaf.isExpanded():
                 self._rebuild_history(leaf, dq)
-        self._refresh_selection()
+            self._leaf_last_ts[key] = head_ts
+            any_changed = True
+        if any_changed:
+            self._refresh_selection()
 
     def reset(self) -> None:
         self._tree.clear()
         self._pgn_items.clear()
         self._sa_items.clear()
         self._leaf_items.clear()
+        self._leaf_last_ts.clear()
         self._selected_item = None
         self._table.clearSpans()
         self._table.setRowCount(0)
