@@ -182,15 +182,22 @@ class AccumViewModel(QAbstractTableModel):
         super().__init__()
         self._store = store
         self._mode  = 0   # index into _GROUP_MODES
+        self._keys_cache: list | None = None
 
     def set_mode(self, mode_index: int) -> None:
         self._mode = mode_index
+        self._keys_cache = None
         self.layoutChanged.emit()
 
     def _active_dict(self) -> dict:
         if self._mode == 1: return self._store.by_pgn_sa
         if self._mode == 2: return self._store.by_pgn
         return self._store.by_arb_id
+
+    def _keys(self) -> list:
+        if self._keys_cache is None:
+            self._keys_cache = list(self._active_dict().keys())
+        return self._keys_cache
 
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
         return len(self._active_dict())
@@ -213,7 +220,7 @@ class AccumViewModel(QAbstractTableModel):
         if not index.isValid():
             return None
         d = self._active_dict()
-        keys = list(d.keys())
+        keys = self._keys()
         if index.row() >= len(keys):
             return None
         entry = d[keys[index.row()]]
@@ -276,6 +283,7 @@ class AccumViewModel(QAbstractTableModel):
         return None
 
     def refresh(self) -> None:
+        self._keys_cache = None
         self.layoutChanged.emit()
 
 

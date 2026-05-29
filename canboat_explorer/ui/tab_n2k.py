@@ -140,6 +140,12 @@ class N2KAccumViewModel(QAbstractTableModel):
     def __init__(self, store: DataStore) -> None:
         super().__init__()
         self._store = store
+        self._keys_cache: list | None = None
+
+    def _keys(self) -> list:
+        if self._keys_cache is None:
+            self._keys_cache = list(self._store.n2k_by_pgn_sa.keys())
+        return self._keys_cache
 
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
         return len(self._store.n2k_by_pgn_sa)
@@ -161,7 +167,7 @@ class N2KAccumViewModel(QAbstractTableModel):
     def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> Any:
         if not index.isValid():
             return None
-        keys = list(self._store.n2k_by_pgn_sa.keys())
+        keys = self._keys()
         if index.row() >= len(keys):
             return None
         entry = self._store.n2k_by_pgn_sa[keys[index.row()]]
@@ -202,9 +208,11 @@ class N2KAccumViewModel(QAbstractTableModel):
         return None
 
     def refresh(self) -> None:
+        self._keys_cache = None
         self.layoutChanged.emit()
 
     def reset(self) -> None:
+        self._keys_cache = None
         self.layoutChanged.emit()
 
 
