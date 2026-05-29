@@ -354,12 +354,14 @@ class RawCanTab(QWidget):
 
     def _update_count(self) -> None:
         model = self._view.model()
+        rate  = self._store.frame_rate()
+        rate_str = f"{rate:,.0f}/s" if rate is not None else "—/s"
         if model is self._time_model:
-            self._count_label.setText(f"{len(self._store.frames):,} frames")
+            self._count_label.setText(f"{len(self._store.frames):,} frames  ({rate_str})")
         else:
-            rows = self._accum_model.rowCount()
+            rows  = self._accum_model.rowCount()
             total = len(self._store.frames)
-            self._count_label.setText(f"{rows:,} rows  ({total:,} frames)")
+            self._count_label.setText(f"{rows:,} rows  ({total:,} frames, {rate_str})")
 
     def _enable_autosize(self) -> None:
         hdr = self._view.horizontalHeader()

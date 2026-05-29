@@ -268,11 +268,13 @@ class N2KTab(QWidget):
 
     def _update_count(self) -> None:
         total = len(self._store.n2k_messages)
+        rate  = self._store.n2k_msg_rate()
+        rate_str = f"{rate:,.0f}/s" if rate is not None else "—/s"
         if self._view.model() is self._time_model:
-            self._count_label.setText(f"{total:,} messages")
+            self._count_label.setText(f"{total:,} messages  ({rate_str})")
         else:
             rows = self._accum_model.rowCount()
-            self._count_label.setText(f"{rows:,} rows  ({total:,} messages)")
+            self._count_label.setText(f"{rows:,} rows  ({total:,} messages, {rate_str})")
 
     def on_messages_added(self) -> None:
         model = self._view.model()
