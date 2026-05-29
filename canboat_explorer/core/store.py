@@ -77,6 +77,7 @@ class DeviceInfo:
     tx_pgns:           set[int]  = field(default_factory=set)  # advertised via PGN 126464
     rx_pgns:           set[int]  = field(default_factory=set)  # advertised via PGN 126464
     seen_pgns:         set[int]  = field(default_factory=set)  # actually observed on the bus
+    last_seen_ts:      float     = 0.0                          # timestamp of last N2KMessage from this SA
 
     @property
     def product_info_line(self) -> str:
@@ -162,17 +163,19 @@ class DataStore:
             for frame in n2k_msg.frames:
                 frame.n2k_msg = n2k_msg
 
+            # Ensure DeviceInfo exists for every SA that emits an N2KMessage,
+            # then keep last_seen_ts current. Identity fields (model, tx_pgns,
+            # …) still populate only when their identification PGNs decode.
+            dev = self.devices.get(n2k_msg.sa)
+            if dev is None:
+                dev = DeviceInfo(sa=n2k_msg.sa)
+                self.devices[n2k_msg.sa] = dev
+            dev.last_seen_ts = n2k_msg.timestamp
+
             msg_key = (n2k_msg.pgn, n2k_msg.sa)
             entry = self.n2k_by_pgn_sa.get(msg_key)
             if entry is None:
                 self.n2k_by_pgn_sa[msg_key] = MessageAccumEntry(n2k_msg, 1)
-                # First (pgn, sa) seen: ensure the SA has a DeviceInfo and record
-                # the PGN as observed. Identity fields (model, tx_pgns, …) still
-                # populate only when their identification PGNs decode.
-                dev = self.devices.get(n2k_msg.sa)
-                if dev is None:
-                    dev = DeviceInfo(sa=n2k_msg.sa)
-                    self.devices[n2k_msg.sa] = dev
                 dev.seen_pgns.add(n2k_msg.pgn)
             else:
                 entry.last_msg = n2k_msg

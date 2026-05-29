@@ -97,15 +97,6 @@ class NetworkTab(QWidget):
     # Data helpers
     # ------------------------------------------------------------------
 
-    def _last_seen_ts(self, sa: int) -> float:
-        ts = 0.0
-        for (_, s), entry in self._store.n2k_by_pgn_sa.items():
-            if s == sa:
-                t = entry.last_msg.timestamp
-                if t > ts:
-                    ts = t
-        return ts
-
     def _collision_tooltip(self, pgn: int) -> str:
         name     = pgn_name(pgn)
         pgn_ref  = f"PGN {pgn} ({name})" if name else f"PGN {pgn}"
@@ -141,7 +132,7 @@ class NetworkTab(QWidget):
         for sa in all_sa:
             dev     = self._store.devices[sa]
             has_ac  = dev.has_address_claim
-            last_ts = self._last_seen_ts(sa)
+            last_ts = dev.last_seen_ts
             stale   = last_ts > 0 and (now - last_ts) > _STALE_S
 
             if dev.model:
@@ -272,10 +263,12 @@ class NetworkTab(QWidget):
             sa      = sa_item.data(0, _ROLE_SA)
             if sa is None:
                 continue
-            last_ts = self._last_seen_ts(sa)
-            stale   = last_ts > 0 and (now - last_ts) > _STALE_S
             dev     = self._store.devices.get(sa)
-            has_ac  = dev is not None and dev.has_address_claim
+            if dev is None:
+                continue
+            last_ts = dev.last_seen_ts
+            stale   = last_ts > 0 and (now - last_ts) > _STALE_S
+            has_ac  = dev.has_address_claim
             if stale:
                 elapsed = int(now - last_ts)
                 sa_item.setText(1, f"silent {elapsed}s")
