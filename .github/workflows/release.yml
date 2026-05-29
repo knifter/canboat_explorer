@@ -25,10 +25,7 @@ jobs:
           pyinstaller --onefile --windowed --name canboat_explorer
           --collect-all nmea2000 --collect-all PyQt6
           --collect-data canboat_explorer
-          --hidden-import can.interfaces.pcan
-          --hidden-import can.interfaces.slcan
-          --hidden-import can.interfaces.gs_usb
-          --hidden-import can.interfaces.socketcan
+          --collect-submodules can
           canboat_explorer/__main__.py
 
       - name: Create release
