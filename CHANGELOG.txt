@@ -9,10 +9,13 @@ v1.0.0
 v1.0.1
  - Save settings file next to .exe file after frozen build
 
----- UPCOMING CHANGES: -----
 v1.1
- - add bus utilization indication and messages/sec
- - show message backlog when paused
+ - A lot of optimization refactoring, caching data and avoid building datastructures in the hot-path. Whole application should feel a lot snappier.
+ - remember size+position
+ - calc and show bus utilization indication, messages/sec, frames/msg in backlog on pause
+ - when paused messages are queued in a backlog now, not lost
+ 
+---- UPCOMING CHANGES: -----
 
 When andromeda is here:
  - add filters
