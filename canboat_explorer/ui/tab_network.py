@@ -91,7 +91,7 @@ class NetworkTab(QWidget):
         self._log_processed    = 0
 
     def has_warnings(self) -> bool:
-        return bool(self._store.collisions)
+        return bool(self._store.sa_pgn_collisions)
 
     # ------------------------------------------------------------------
     # Data helpers
@@ -123,7 +123,7 @@ class NetworkTab(QWidget):
             sa_list = ", ".join(f"SA:{s}" for s in observed)
             return f"{pgn_ref}: transmitted by multiple source addresses ({sa_list})"
 
-        advertised = self._store.tx_by_pgn.get(pgn, set())
+        advertised = self._store.sa_tx_by_pgn.get(pgn, set())
         union      = sorted(set(observed) | advertised)
         sa_list    = ", ".join(f"SA:{s}" for s in union)
         return f"{pgn_ref}: might be transmitted by multiple source addresses ({sa_list})"
@@ -136,7 +136,7 @@ class NetworkTab(QWidget):
         self._tree.clear()
         now        = time.time()
         all_sa     = sorted(self._store.devices)
-        collisions = self._store.collisions
+        collisions = self._store.sa_pgn_collisions
 
         for sa in all_sa:
             dev     = self._store.devices[sa]

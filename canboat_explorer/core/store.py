@@ -281,7 +281,7 @@ class DataStore:
                 dev.rx_pgns = set(collected)
 
     @property
-    def tx_by_pgn(self) -> dict[int, set[int]]:
+    def sa_tx_by_pgn(self) -> dict[int, set[int]]:
         """For each PGN, the set of SAs that advertise it in their TX list."""
         result: dict[int, set[int]] = {}
         for sa, dev in self.devices.items():
@@ -290,12 +290,12 @@ class DataStore:
         return result
 
     @property
-    def collisions(self) -> set[int]:
+    def sa_pgn_collisions(self) -> set[int]:
         """PGNs where union of (observed SAs) ∪ (TX-advertised SAs) ≥ 2."""
         obs_by_pgn: dict[int, set[int]] = {}
         for pgn, sa in self.n2k_by_pgn_sa:
             obs_by_pgn.setdefault(pgn, set()).add(sa)
-        tx = self.tx_by_pgn
+        tx = self.sa_tx_by_pgn
         out: set[int] = set()
         for pgn in set(obs_by_pgn) | set(tx):
             if len(obs_by_pgn.get(pgn, set()) | tx.get(pgn, set())) >= 2:
