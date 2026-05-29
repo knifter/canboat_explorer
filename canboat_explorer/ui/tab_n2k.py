@@ -140,13 +140,9 @@ class N2KAccumViewModel(QAbstractTableModel):
     def __init__(self, store: DataStore) -> None:
         super().__init__()
         self._store = store
-        self._by_pgn_sa: dict[tuple[int, int], N2KMessage] = {}
-        self._counts: dict[tuple[int, int], int] = {}
-        self._first_ts: dict[tuple[int, int], float] = {}
-        self._processed = 0
 
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
-        return len(self._by_pgn_sa)
+        return len(self._store.n2k_by_pgn_sa)
 
     def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
         return len(_COLS_ACCUM)
@@ -165,12 +161,12 @@ class N2KAccumViewModel(QAbstractTableModel):
     def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> Any:
         if not index.isValid():
             return None
-        keys = list(self._by_pgn_sa.keys())
+        keys = list(self._store.n2k_by_pgn_sa.keys())
         if index.row() >= len(keys):
             return None
-        key = keys[index.row()]
-        msg = self._by_pgn_sa[key]
-        col = index.column()
+        entry = self._store.n2k_by_pgn_sa[keys[index.row()]]
+        msg   = entry.last_msg
+        col   = index.column()
 
         if role == Qt.ItemDataRole.DisplayRole:
             if col == 0: return _fmt_time(msg.timestamp)
@@ -180,15 +176,10 @@ class N2KAccumViewModel(QAbstractTableModel):
             if col == 4: return str(msg.priority)
             if col == 5: return str(len(msg.payload))
             if col == 6: return msg.payload.hex(" ").upper()
-            if col == 7: return str(self._counts[key])
+            if col == 7: return str(entry.count)
             if col == 8:
-                count = self._counts[key]
-                if count < 2:
-                    return "—"
-                elapsed = msg.timestamp - self._first_ts[key]
-                if elapsed <= 0:
-                    return "—"
-                return f"{elapsed / (count - 1) * 1000:.0f} ms"
+                ms = entry.interval_ms
+                return f"{ms:.0f} ms" if ms is not None else "—"
             return None
 
         flag = _flag_for_message(self._store, msg)
@@ -211,22 +202,9 @@ class N2KAccumViewModel(QAbstractTableModel):
         return None
 
     def refresh(self) -> None:
-        new_msgs = self._store.n2k_messages[self._processed:]
-        for msg in new_msgs:
-            key = (msg.pgn, msg.sa)
-            if key not in self._by_pgn_sa:
-                self._first_ts[key] = msg.timestamp
-                self._counts[key] = 0
-            self._by_pgn_sa[key] = msg
-            self._counts[key] += 1
-        self._processed = len(self._store.n2k_messages)
         self.layoutChanged.emit()
 
     def reset(self) -> None:
-        self._by_pgn_sa.clear()
-        self._counts.clear()
-        self._first_ts.clear()
-        self._processed = 0
         self.layoutChanged.emit()
 
 

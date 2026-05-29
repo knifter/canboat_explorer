@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
 )
 
 from canboat_explorer.core.pgn_catalogue import pgn_name
-from canboat_explorer.core.store import DataStore
+from canboat_explorer.core.store import DataStore, DeviceInfo
 
 _STALE_S    = 60.0
 _SECTION_FG = QColor("#aaaaaa")
@@ -41,11 +41,6 @@ class NetworkTab(QWidget):
         self._last_n2k_count   = 0
         self._last_decoded_len = 0
         self._log_processed    = 0
-
-        # Caches populated by _rebuild_tree(), read by has_warnings() and
-        # _collision_tooltip() between rebuilds.
-        self._collisions: set[int]            = set()
-        self._tx_by_pgn:  dict[int, set[int]] = {}
 
         splitter = QSplitter(Qt.Orientation.Vertical)
 
@@ -94,42 +89,27 @@ class NetworkTab(QWidget):
         self._last_n2k_count   = 0
         self._last_decoded_len = 0
         self._log_processed    = 0
-        self._collisions.clear()
-        self._tx_by_pgn.clear()
 
     def has_warnings(self) -> bool:
-        return bool(self._collisions)
+        return bool(self._store.collisions)
 
     # ------------------------------------------------------------------
     # Data helpers
     # ------------------------------------------------------------------
 
-    def _all_sa(self) -> list[int]:
-        seen: set[int] = set()
-        for _, sa in self._store.by_pgn_sa:
-            seen.add(sa)
-        return sorted(seen)
-
     def _last_seen_ts(self, sa: int) -> float:
         ts = 0.0
-        for (_, s), entry in self._store.by_pgn_sa.items():
+        for (_, s), entry in self._store.n2k_by_pgn_sa.items():
             if s == sa:
-                t = entry.last_frame.timestamp
+                t = entry.last_msg.timestamp
                 if t > ts:
                     ts = t
         return ts
 
-    def _observed_pgns(self, sa: int) -> dict[int, int]:
-        return {
-            pgn: entry.count
-            for (pgn, s), entry in self._store.by_pgn_sa.items()
-            if s == sa
-        }
-
     def _collision_tooltip(self, pgn: int) -> str:
         name     = pgn_name(pgn)
         pgn_ref  = f"PGN {pgn} ({name})" if name else f"PGN {pgn}"
-        observed = sorted(s for (p, s) in self._store.by_pgn_sa if p == pgn)
+        observed = sorted(s for (p, s) in self._store.n2k_by_pgn_sa if p == pgn)
         variants = sorted({
             desc for (p, _), desc in self._store.pgn_sa_names.items() if p == pgn
         })
@@ -143,77 +123,10 @@ class NetworkTab(QWidget):
             sa_list = ", ".join(f"SA:{s}" for s in observed)
             return f"{pgn_ref}: transmitted by multiple source addresses ({sa_list})"
 
-        advertised = self._tx_by_pgn.get(pgn, set())
+        advertised = self._store.tx_by_pgn.get(pgn, set())
         union      = sorted(set(observed) | advertised)
         sa_list    = ", ".join(f"SA:{s}" for s in union)
         return f"{pgn_ref}: might be transmitted by multiple source addresses ({sa_list})"
-
-    def _get_model_name(self, sa: int) -> str | None:
-        dq = self._store.decoded_by_key.get((126996, sa, ()))
-        if not dq:
-            return None
-        for field in dq[0].fields:
-            if "model id" in (field.name or "").lower():
-                val = str(field.value or "").strip()
-                if val:
-                    return val
-        return None
-
-    def _get_product_info_line(self, sa: int) -> str:
-        dq = self._store.decoded_by_key.get((126996, sa, ()))
-        if not dq:
-            return ""
-        parts: list[str] = []
-        for field in dq[0].fields:
-            name_lower = (field.name or "").lower()
-            val        = str(field.value or "").strip()
-            if not val:
-                continue
-            if "model id" in name_lower:
-                parts.append(f"Model: {val}")
-            elif "software" in name_lower or (
-                "version" in name_lower and "database" not in name_lower
-            ):
-                parts.append(f"FW: {val}")
-            elif "serial" in name_lower:
-                parts.append(f"S/N: {val}")
-            elif "manufacturer" in name_lower and "code" in name_lower:
-                parts.append(f"Mfr: {val}")
-        return "  |  ".join(parts)
-
-    def _get_pgn_lists(self, sa: int) -> tuple[list[int], list[int]]:
-        tx: list[int] = []
-        rx: list[int] = []
-        for (pgn_k, sa_k, _), dq in self._store.decoded_by_key.items():
-            if pgn_k != 126464 or sa_k != sa or not dq:
-                continue
-            func_code: int | None = None
-            collected: list[int]  = []
-            for field in dq[0].fields:
-                name_lower = (field.name or "").lower()
-                if "function" in name_lower:
-                    try:
-                        func_code = int(field.raw_value)
-                    except (TypeError, ValueError):
-                        pass
-                elif "pgn" in name_lower:
-                    val = field.value
-                    if isinstance(val, list):
-                        for v in val:
-                            try:
-                                collected.append(int(v))
-                            except (TypeError, ValueError):
-                                pass
-                    elif val is not None:
-                        try:
-                            collected.append(int(val))
-                        except (TypeError, ValueError):
-                            pass
-            if func_code == 0:
-                tx = collected
-            elif func_code == 1:
-                rx = collected
-        return tx, rx
 
     # ------------------------------------------------------------------
     # Tree rebuild
@@ -221,41 +134,18 @@ class NetworkTab(QWidget):
 
     def _rebuild_tree(self) -> None:
         self._tree.clear()
-        now      = time.time()
-        all_sa   = self._all_sa()
-
-        # Per-SA TX/RX lists (decoded from PGN 126464) — computed once, reused below.
-        pgn_lists = {sa: self._get_pgn_lists(sa) for sa in all_sa}
-
-        # Invert TX advertisements: pgn → set of SAs that advertise it.
-        tx_by_pgn: dict[int, set[int]] = {}
-        for sa, (tx, _) in pgn_lists.items():
-            for pgn in tx:
-                tx_by_pgn.setdefault(pgn, set()).add(sa)
-
-        # Observed transmitters: pgn → set of SAs actually seen sending it.
-        obs_by_pgn: dict[int, set[int]] = {}
-        for pgn, sa in self._store.by_pgn_sa:
-            obs_by_pgn.setdefault(pgn, set()).add(sa)
-
-        # Collision = potential or actual multi-SA (union ≥ 2).
-        collisions = {
-            pgn for pgn in (set(obs_by_pgn) | set(tx_by_pgn))
-            if len(obs_by_pgn.get(pgn, set()) | tx_by_pgn.get(pgn, set())) >= 2
-        }
-
-        # Stash for has_warnings() and _collision_tooltip() between rebuilds.
-        self._collisions = collisions
-        self._tx_by_pgn  = tx_by_pgn
+        now        = time.time()
+        all_sa     = sorted(self._store.devices)
+        collisions = self._store.collisions
 
         for sa in all_sa:
-            has_ac     = (60928, sa, ()) in self._store.decoded_by_key
-            last_ts    = self._last_seen_ts(sa)
-            stale      = last_ts > 0 and (now - last_ts) > _STALE_S
-            model_name = self._get_model_name(sa)
+            dev     = self._store.devices[sa]
+            has_ac  = dev.has_address_claim
+            last_ts = self._last_seen_ts(sa)
+            stale   = last_ts > 0 and (now - last_ts) > _STALE_S
 
-            if model_name:
-                label = f"SA:{sa}  —  {model_name}"
+            if dev.model:
+                label = f"SA:{sa}  —  {dev.model}"
             elif has_ac:
                 label = f"SA:{sa}  —  (address claimed)"
             else:
@@ -273,7 +163,7 @@ class NetworkTab(QWidget):
                 sa_item.setForeground(1, QBrush(fg))
             self._tree.addTopLevelItem(sa_item)
 
-            info_line = self._get_product_info_line(sa)
+            info_line = dev.product_info_line
             if info_line:
                 info_item = QTreeWidgetItem([info_line, ""])
                 italic = QFont()
@@ -282,23 +172,19 @@ class NetworkTab(QWidget):
                 info_item.setFlags(info_item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
                 sa_item.addChild(info_item)
 
-            observed = self._observed_pgns(sa)
             if has_ac:
-                tx_pgns, rx_pgns = pgn_lists[sa]
-                self._build_identified_children(sa_item, sa, observed, collisions, tx_pgns, rx_pgns)
+                self._build_identified_children(sa_item, sa, dev, collisions)
             else:
-                self._build_seen_only_children(sa_item, sa, observed, collisions)
+                self._build_seen_only_children(sa_item, sa, dev, collisions)
 
             sa_item.setExpanded(True)
 
     def _build_identified_children(
         self, sa_item: QTreeWidgetItem, sa: int,
-        observed: dict[int, int], collisions: set[int],
-        tx_pgns: list[int], rx_pgns: list[int],
+        dev: DeviceInfo, collisions: set[int],
     ) -> None:
-        tx_set  = set(tx_pgns)
-        rx_set  = set(rx_pgns)
-        obs_set = set(observed.keys())
+        tx_pgns = sorted(dev.tx_pgns)
+        rx_pgns = sorted(dev.rx_pgns)
 
         if tx_pgns:
             tx_hdr = self._section_item(f"TX PGNs ({len(tx_pgns)})")
@@ -306,9 +192,9 @@ class NetworkTab(QWidget):
             for pgn in tx_pgns:
                 prefix = "⚠ " if pgn in collisions else "    "
                 child  = QTreeWidgetItem(
-                    [prefix + _pgn_label(pgn), self._obs_status(pgn, sa, observed)]
+                    [prefix + _pgn_label(pgn), self._obs_status(pgn, sa)]
                 )
-                if pgn not in observed:
+                if pgn not in dev.seen_pgns:
                     child.setForeground(1, QBrush(_STALE_FG))
                 if pgn in collisions:
                     child.setToolTip(0, self._collision_tooltip(pgn))
@@ -323,7 +209,7 @@ class NetworkTab(QWidget):
                 rx_hdr.addChild(child)
             rx_hdr.setExpanded(True)
 
-        unadvertised = obs_set - tx_set - rx_set - _MGMT_PGNS
+        unadvertised = dev.seen_pgns - dev.tx_pgns - dev.rx_pgns - _MGMT_PGNS
         if unadvertised:
             ua_label = "Observed / not advertised" + (
                 "  (no PGN list received)" if not tx_pgns and not rx_pgns else ""
@@ -333,7 +219,7 @@ class NetworkTab(QWidget):
             for pgn in sorted(unadvertised):
                 prefix = "⚠ " if pgn in collisions else "    "
                 child = QTreeWidgetItem(
-                    [prefix + _pgn_label(pgn), self._obs_status(pgn, sa, observed)]
+                    [prefix + _pgn_label(pgn), self._obs_status(pgn, sa)]
                 )
                 if pgn in collisions:
                     child.setToolTip(0, self._collision_tooltip(pgn))
@@ -342,30 +228,29 @@ class NetworkTab(QWidget):
 
     def _build_seen_only_children(
         self, sa_item: QTreeWidgetItem, sa: int,
-        observed: dict[int, int], collisions: set[int],
+        dev: DeviceInfo, collisions: set[int],
     ) -> None:
-        visible = {pgn: cnt for pgn, cnt in observed.items() if pgn not in _MGMT_PGNS}
+        visible = dev.seen_pgns - _MGMT_PGNS
         if not visible:
             return
         hdr = self._section_item(f"Observed PGNs ({len(visible)})")
         sa_item.addChild(hdr)
         for pgn in sorted(visible):
             prefix = "⚠ " if pgn in collisions else "    "
-            child = QTreeWidgetItem([prefix + _pgn_label(pgn), self._obs_status(pgn, sa, observed)])
+            child = QTreeWidgetItem([prefix + _pgn_label(pgn), self._obs_status(pgn, sa)])
             if pgn in collisions:
                 child.setToolTip(0, self._collision_tooltip(pgn))
             hdr.addChild(child)
         hdr.setExpanded(True)
 
-    def _obs_status(self, pgn: int, sa: int, observed: dict[int, int]) -> str:
-        cnt = observed.get(pgn)
-        if cnt is None:
+    def _obs_status(self, pgn: int, sa: int) -> str:
+        entry = self._store.n2k_by_pgn_sa.get((pgn, sa))
+        if entry is None:
             return "(not observed)"
-        entry    = self._store.by_pgn_sa.get((pgn, sa))
         interval = ""
-        if entry and entry.interval_ms is not None:
+        if entry.interval_ms is not None:
             interval = f"  {entry.interval_ms:.0f}ms"
-        return f"✓ {cnt}×{interval}"
+        return f"✓ {entry.count}×{interval}"
 
     def _section_item(self, label: str) -> QTreeWidgetItem:
         item = QTreeWidgetItem([label, ""])
@@ -389,7 +274,8 @@ class NetworkTab(QWidget):
                 continue
             last_ts = self._last_seen_ts(sa)
             stale   = last_ts > 0 and (now - last_ts) > _STALE_S
-            has_ac  = (60928, sa, ()) in self._store.decoded_by_key
+            dev     = self._store.devices.get(sa)
+            has_ac  = dev is not None and dev.has_address_claim
             if stale:
                 elapsed = int(now - last_ts)
                 sa_item.setText(1, f"silent {elapsed}s")
@@ -408,7 +294,7 @@ class NetworkTab(QWidget):
     def _append_log(self) -> None:
         msgs = self._store.n2k_messages
         for m in msgs[self._log_processed:]:
-            if m.pgn == 60928:
+            if m.pgn == 60928:  # ISO Address Claim
                 self._log.addItem(f"{_fmt_time(m.timestamp)}  SA:{m.sa}  claimed address")
         self._log_processed = len(msgs)
         if self._log.count():

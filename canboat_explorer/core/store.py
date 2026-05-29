@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
@@ -24,7 +24,8 @@ Priority = Literal["ignore", "highlight", "warning", "error"] | None
 
 
 @dataclass
-class AccumEntry:
+class FrameAccumEntry:
+    """Per-(grouping-key) tally of raw CAN frames."""
     last_frame: RawFrame
     count: int
     first_ts: float = 0.0
@@ -43,16 +44,70 @@ class AccumEntry:
         return elapsed / (self.count - 1) * 1000
 
 
+@dataclass
+class MessageAccumEntry:
+    """Per-(pgn, sa) tally of assembled NMEA 2000 messages."""
+    last_msg: N2KMessage
+    count: int
+    first_ts: float = 0.0
+
+    def __post_init__(self) -> None:
+        if self.first_ts == 0.0:
+            self.first_ts = self.last_msg.timestamp
+
+    @property
+    def interval_ms(self) -> float | None:
+        if self.count < 2:
+            return None
+        elapsed = self.last_msg.timestamp - self.first_ts
+        if elapsed <= 0:
+            return None
+        return elapsed / (self.count - 1) * 1000
+
+
+@dataclass
+class DeviceInfo:
+    """Per-SA device identity and observed activity."""
+    sa:                int
+    has_address_claim: bool      = False           # PGN 60928 has decoded for this SA
+    model:             str | None = None           # PGN 126996
+    manufacturer:      str | None = None           # PGN 126996
+    firmware:          str | None = None           # PGN 126996
+    serial:            str | None = None           # PGN 126996
+    tx_pgns:           set[int]  = field(default_factory=set)  # advertised via PGN 126464
+    rx_pgns:           set[int]  = field(default_factory=set)  # advertised via PGN 126464
+    seen_pgns:         set[int]  = field(default_factory=set)  # actually observed on the bus
+
+    @property
+    def product_info_line(self) -> str:
+        parts: list[str] = []
+        if self.model:        parts.append(f"Model: {self.model}")
+        if self.firmware:     parts.append(f"FW: {self.firmware}")
+        if self.serial:       parts.append(f"S/N: {self.serial}")
+        if self.manufacturer: parts.append(f"Mfr: {self.manufacturer}")
+        return "  |  ".join(parts)
+
+
+# PGNs that update DeviceInfo when decoded.
+_DEVICE_INFO_PGNS = {
+    60928,   # ISO Address Claim
+    126464,  # PGN List — Transmit/Receive
+    126996,  # Product Information
+}
+
+
 class DataStore:
     def __init__(self, log: SessionLog, sidecar_path: Path) -> None:
         self.log = log
         self.sidecar_path = sidecar_path
 
         self.frames: list[RawFrame] = []
-        self.by_arb_id: dict[int, AccumEntry] = {}
-        self.by_pgn_sa: dict[tuple[int, int], AccumEntry] = {}
-        self.by_pgn: dict[int, AccumEntry] = {}
+        self.by_arb_id: dict[int, FrameAccumEntry] = {}
+        self.by_pgn_sa: dict[tuple[int, int], FrameAccumEntry] = {}
+        self.by_pgn: dict[int, FrameAccumEntry] = {}
         self.n2k_messages: list[N2KMessage] = []
+        self.n2k_by_pgn_sa: dict[tuple[int, int], MessageAccumEntry] = {}
+        self.devices: dict[int, DeviceInfo] = {}
         self.decoded_by_key: dict[tuple[int, int, tuple], deque] = {}
         self._fp = FastPacketReassembler()
         self._n2k_decoder = NMEA2000Decoder()
@@ -107,6 +162,22 @@ class DataStore:
             for frame in n2k_msg.frames:
                 frame.n2k_msg = n2k_msg
 
+            msg_key = (n2k_msg.pgn, n2k_msg.sa)
+            entry = self.n2k_by_pgn_sa.get(msg_key)
+            if entry is None:
+                self.n2k_by_pgn_sa[msg_key] = MessageAccumEntry(n2k_msg, 1)
+                # First (pgn, sa) seen: ensure the SA has a DeviceInfo and record
+                # the PGN as observed. Identity fields (model, tx_pgns, …) still
+                # populate only when their identification PGNs decode.
+                dev = self.devices.get(n2k_msg.sa)
+                if dev is None:
+                    dev = DeviceInfo(sa=n2k_msg.sa)
+                    self.devices[n2k_msg.sa] = dev
+                dev.seen_pgns.add(n2k_msg.pgn)
+            else:
+                entry.last_msg = n2k_msg
+                entry.count += 1
+
         if decoded is not None:
             qualifier = tuple(sorted(
                 (f.id, f.raw_value)
@@ -121,9 +192,12 @@ class DataStore:
             sa_key = (decoded.PGN, decoded.source)
             self.pgn_sa_names[sa_key] = decoded.description
 
+            if decoded.PGN in _DEVICE_INFO_PGNS:
+                self._update_device(decoded)
+
         entry = self.by_arb_id.get(msg.arbitration_id)
         if entry is None:
-            self.by_arb_id[msg.arbitration_id] = AccumEntry(msg, 1)
+            self.by_arb_id[msg.arbitration_id] = FrameAccumEntry(msg, 1)
         else:
             entry.last_frame = msg
             entry.count += 1
@@ -132,17 +206,101 @@ class DataStore:
             key = (n2k.pgn, n2k.sa)
             entry = self.by_pgn_sa.get(key)
             if entry is None:
-                self.by_pgn_sa[key] = AccumEntry(msg, 1)
+                self.by_pgn_sa[key] = FrameAccumEntry(msg, 1)
             else:
                 entry.last_frame = msg
                 entry.count += 1
 
             entry = self.by_pgn.get(n2k.pgn)
             if entry is None:
-                self.by_pgn[n2k.pgn] = AccumEntry(msg, 1)
+                self.by_pgn[n2k.pgn] = FrameAccumEntry(msg, 1)
             else:
                 entry.last_frame = msg
                 entry.count += 1
+
+    # ------------------------------------------------------------------
+    # Device registry (PGN 60928 / 126464 / 126996)
+    # ------------------------------------------------------------------
+
+    def _update_device(self, decoded) -> None:
+        """Update DeviceInfo for decoded.source based on which PGN this is."""
+        sa  = decoded.source
+        dev = self.devices.get(sa)
+        if dev is None:
+            dev = DeviceInfo(sa=sa)
+            self.devices[sa] = dev
+
+        if decoded.PGN == 60928:   # ISO Address Claim
+            dev.has_address_claim = True
+            return
+
+        if decoded.PGN == 126996:  # Product Information
+            for f in decoded.fields:
+                name = (f.name or "").lower()
+                val  = str(f.value or "").strip()
+                if not val:
+                    continue
+                if "model id" in name:
+                    dev.model = val
+                elif "manufacturer" in name and "code" in name:
+                    dev.manufacturer = val
+                elif "software" in name or (
+                    "version" in name and "database" not in name
+                ):
+                    dev.firmware = val
+                elif "serial" in name:
+                    dev.serial = val
+            return
+
+        if decoded.PGN == 126464:  # PGN List — Transmit/Receive
+            func_code: int | None = None
+            collected: list[int]  = []
+            for f in decoded.fields:
+                name = (f.name or "").lower()
+                if "function" in name:
+                    try:
+                        func_code = int(f.raw_value)
+                    except (TypeError, ValueError):
+                        pass
+                elif "pgn" in name:
+                    v = f.value
+                    if isinstance(v, list):
+                        for x in v:
+                            try:
+                                collected.append(int(x))
+                            except (TypeError, ValueError):
+                                pass
+                    elif v is not None:
+                        try:
+                            collected.append(int(v))
+                        except (TypeError, ValueError):
+                            pass
+            if func_code == 0:
+                dev.tx_pgns = set(collected)
+            elif func_code == 1:
+                dev.rx_pgns = set(collected)
+
+    @property
+    def tx_by_pgn(self) -> dict[int, set[int]]:
+        """For each PGN, the set of SAs that advertise it in their TX list."""
+        result: dict[int, set[int]] = {}
+        for sa, dev in self.devices.items():
+            for pgn in dev.tx_pgns:
+                result.setdefault(pgn, set()).add(sa)
+        return result
+
+    @property
+    def collisions(self) -> set[int]:
+        """PGNs where union of (observed SAs) ∪ (TX-advertised SAs) ≥ 2."""
+        obs_by_pgn: dict[int, set[int]] = {}
+        for pgn, sa in self.n2k_by_pgn_sa:
+            obs_by_pgn.setdefault(pgn, set()).add(sa)
+        tx = self.tx_by_pgn
+        out: set[int] = set()
+        for pgn in set(obs_by_pgn) | set(tx):
+            if len(obs_by_pgn.get(pgn, set()) | tx.get(pgn, set())) >= 2:
+                out.add(pgn)
+        return out
 
     # ------------------------------------------------------------------
     # Flag / highlight state
@@ -197,6 +355,8 @@ class DataStore:
         self.by_pgn_sa.clear()
         self.by_pgn.clear()
         self.n2k_messages.clear()
+        self.n2k_by_pgn_sa.clear()
+        self.devices.clear()
         self.decoded_by_key.clear()
         self._fp = FastPacketReassembler()
         self._n2k_decoder = NMEA2000Decoder()
