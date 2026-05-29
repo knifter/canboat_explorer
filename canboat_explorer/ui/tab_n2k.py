@@ -222,6 +222,7 @@ class N2KTab(QWidget):
         self._store       = store
         self._time_model  = N2KTimeViewModel(store)
         self._accum_model = N2KAccumViewModel(store)
+        self._held: int | None = None   # frames-in-queue held back while paused
 
         self._view = QTableView()
         self._view.setModel(self._time_model)
@@ -270,11 +271,19 @@ class N2KTab(QWidget):
         total = len(self._store.n2k_messages)
         rate  = self._store.n2k_msg_rate()
         rate_str = f"{rate:,.0f}/s" if rate is not None else "—/s"
+        held_str = f"  [{self._held:,} frames held]" if self._held is not None else ""
         if self._view.model() is self._time_model:
-            self._count_label.setText(f"{total:,} messages  ({rate_str})")
+            self._count_label.setText(f"{total:,} messages  ({rate_str}){held_str}")
         else:
             rows = self._accum_model.rowCount()
-            self._count_label.setText(f"{rows:,} rows  ({total:,} messages, {rate_str})")
+            self._count_label.setText(f"{rows:,} rows  ({total:,} messages, {rate_str}){held_str}")
+
+    def set_held(self, held: int | None) -> None:
+        """Tell the tab how many frames are held in the input queue (paused)."""
+        if held == self._held:
+            return
+        self._held = held
+        self._update_count()
 
     def on_messages_added(self) -> None:
         model = self._view.model()

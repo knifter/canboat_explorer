@@ -191,6 +191,16 @@ class MainWindow(QMainWindow):
         self._update_bus_indicator()
 
     def _update_bus_indicator(self) -> None:
+        # Propagate paused/held state to the tabs' count labels. Both show
+        # the same number — frames in the queue. Tab 2 labels it as
+        # "frames held" rather than "messages held" because frames only
+        # become assembled messages after store._add runs (which is what's
+        # paused).
+        paused = self._reader is not None and self._reader.is_paused
+        held   = self._frame_queue.qsize() if paused else None
+        self._tab_raw.set_held(held)
+        self._tab_n2k.set_held(held)
+
         bitrate  = settings.last_can_baud
         rate_str = f"{bitrate // 1000} kbps" if bitrate else "—"
         active   = self._reader is not None and not self._reader.is_paused
@@ -225,6 +235,8 @@ class MainWindow(QMainWindow):
             self._disconnect()
             self._status_label.setText(f"Connection error: {err}")
             return
+        if self._reader and self._reader.is_paused:
+            return   # frames keep accumulating in the queue; resume drains them
         if self._frame_queue.empty():
             return
         batch: list[RawFrame] = []

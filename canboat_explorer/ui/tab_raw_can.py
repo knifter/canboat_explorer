@@ -295,6 +295,7 @@ class RawCanTab(QWidget):
         self._accum_model = AccumViewModel(store)
 
         self._min_col_widths: dict[int, int] = {}
+        self._held: int | None = None   # frames-in-queue held back while paused; None = not paused
 
         self._view = QTableView()
         self._view.setModel(self._time_model)
@@ -356,12 +357,24 @@ class RawCanTab(QWidget):
         model = self._view.model()
         rate  = self._store.frame_rate()
         rate_str = f"{rate:,.0f}/s" if rate is not None else "—/s"
+        held_str = f"  [{self._held:,} held]" if self._held is not None else ""
         if model is self._time_model:
-            self._count_label.setText(f"{len(self._store.frames):,} frames  ({rate_str})")
+            self._count_label.setText(
+                f"{len(self._store.frames):,} frames  ({rate_str}){held_str}"
+            )
         else:
             rows  = self._accum_model.rowCount()
             total = len(self._store.frames)
-            self._count_label.setText(f"{rows:,} rows  ({total:,} frames, {rate_str})")
+            self._count_label.setText(
+                f"{rows:,} rows  ({total:,} frames, {rate_str}){held_str}"
+            )
+
+    def set_held(self, held: int | None) -> None:
+        """Tell the tab how many frames are held in the input queue (paused)."""
+        if held == self._held:
+            return
+        self._held = held
+        self._update_count()
 
     def _enable_autosize(self) -> None:
         hdr = self._view.horizontalHeader()

@@ -39,8 +39,8 @@ class CanReader(threading.Thread):
         self.serial_baud = serial_baud
         self.can_baud = can_baud
 
-        self._paused = threading.Event()
-        self._paused.set()          # not paused initially
+        self._paused = False    # soft flag: reader keeps reading; drain side
+                                # checks this and stops processing while paused
         self._stop_flag = threading.Event()
         self.error: str | None = None
         self._ts_offset: float | None = None
@@ -50,18 +50,17 @@ class CanReader(threading.Thread):
     # ------------------------------------------------------------------
 
     def pause(self) -> None:
-        self._paused.clear()
+        self._paused = True
 
     def resume(self) -> None:
-        self._paused.set()
+        self._paused = False
 
     @property
     def is_paused(self) -> bool:
-        return not self._paused.is_set()
+        return self._paused
 
     def stop(self) -> None:
         self._stop_flag.set()
-        self._paused.set()      # unblock if waiting in pause
 
     # ------------------------------------------------------------------
     # Thread body
@@ -76,10 +75,6 @@ class CanReader(threading.Thread):
 
         try:
             while not self._stop_flag.is_set():
-                self._paused.wait()             # blocks while paused
-                if self._stop_flag.is_set():
-                    break
-
                 try:
                     msg = bus.recv(timeout=0.1)
                 except Exception as exc:
