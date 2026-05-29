@@ -119,6 +119,11 @@ class DataStore:
         self.incomplete_msg_count: int = 0  # N2KMessages emitted with is_complete=False
         self.undecoded_msg_count:  int = 0  # complete N2KMessages whose decode returned None
 
+        # Lazy caches for derived properties — dropped (set to None) on relevant
+        # mutations, rebuilt on next read. See sa_tx_by_pgn / sa_pgn_collisions.
+        self._sa_tx_by_pgn_cache:      dict[int, set[int]] | None = None
+        self._sa_pgn_collisions_cache: set[int]            | None = None
+
         # JSON-serialisable flag dict; keys are "a:<arb_id>" or "p:<pgn>"
         self._flags: dict[str, str] = {}
         self._load_sidecar()
@@ -177,6 +182,7 @@ class DataStore:
             if entry is None:
                 self.n2k_by_pgn_sa[msg_key] = MessageAccumEntry(n2k_msg, 1)
                 dev.seen_pgns.add(n2k_msg.pgn)
+                self._sa_pgn_collisions_cache = None
             else:
                 entry.last_msg = n2k_msg
                 entry.count += 1
@@ -280,30 +286,39 @@ class DataStore:
                             pass
             if func_code == 0:
                 dev.tx_pgns = set(collected)
+                self._sa_tx_by_pgn_cache      = None
+                self._sa_pgn_collisions_cache = None
             elif func_code == 1:
                 dev.rx_pgns = set(collected)
 
     @property
     def sa_tx_by_pgn(self) -> dict[int, set[int]]:
-        """For each PGN, the set of SAs that advertise it in their TX list."""
-        result: dict[int, set[int]] = {}
-        for sa, dev in self.devices.items():
-            for pgn in dev.tx_pgns:
-                result.setdefault(pgn, set()).add(sa)
-        return result
+        """For each PGN, the set of SAs that advertise it in their TX list.
+        Lazy-cached; invalidated when a device's tx_pgns change (PGN 126464 decode)."""
+        if self._sa_tx_by_pgn_cache is None:
+            result: dict[int, set[int]] = {}
+            for sa, dev in self.devices.items():
+                for pgn in dev.tx_pgns:
+                    result.setdefault(pgn, set()).add(sa)
+            self._sa_tx_by_pgn_cache = result
+        return self._sa_tx_by_pgn_cache
 
     @property
     def sa_pgn_collisions(self) -> set[int]:
-        """PGNs where union of (observed SAs) ∪ (TX-advertised SAs) ≥ 2."""
-        obs_by_pgn: dict[int, set[int]] = {}
-        for pgn, sa in self.n2k_by_pgn_sa:
-            obs_by_pgn.setdefault(pgn, set()).add(sa)
-        tx = self.sa_tx_by_pgn
-        out: set[int] = set()
-        for pgn in set(obs_by_pgn) | set(tx):
-            if len(obs_by_pgn.get(pgn, set()) | tx.get(pgn, set())) >= 2:
-                out.add(pgn)
-        return out
+        """PGNs where union of (observed SAs) ∪ (TX-advertised SAs) ≥ 2.
+        Lazy-cached; invalidated on a new (pgn, sa) in n2k_by_pgn_sa or a
+        PGN 126464 decode (tx_pgns change)."""
+        if self._sa_pgn_collisions_cache is None:
+            obs_by_pgn: dict[int, set[int]] = {}
+            for pgn, sa in self.n2k_by_pgn_sa:
+                obs_by_pgn.setdefault(pgn, set()).add(sa)
+            tx = self.sa_tx_by_pgn
+            out: set[int] = set()
+            for pgn in set(obs_by_pgn) | set(tx):
+                if len(obs_by_pgn.get(pgn, set()) | tx.get(pgn, set())) >= 2:
+                    out.add(pgn)
+            self._sa_pgn_collisions_cache = out
+        return self._sa_pgn_collisions_cache
 
     # ------------------------------------------------------------------
     # Flag / highlight state
@@ -367,6 +382,8 @@ class DataStore:
         self.oob_frame_count = 0
         self.incomplete_msg_count = 0
         self.undecoded_msg_count = 0
+        self._sa_tx_by_pgn_cache      = None
+        self._sa_pgn_collisions_cache = None
 
     def clear(self) -> None:
         """Archive the current log, reset in-memory state, start fresh."""
