@@ -31,6 +31,12 @@ _DEFAULTS: dict[str, dict[str, str]] = {
         "last_serial_baud": "2000000",
         "last_can_baud":    "250000",
     },
+    "window": {
+        "width":  "1200",
+        "height": "700",
+        "x":      "-1",   # -1 = not yet saved, let the OS place
+        "y":      "-1",
+    },
 }
 
 
@@ -92,6 +98,46 @@ class Settings:
     @last_can_baud.setter
     def last_can_baud(self, value: int) -> None:
         self._cfg["connection"]["last_can_baud"] = str(value)
+        self._save()
+
+    # ------------------------------------------------------------------
+    # [window]
+    # ------------------------------------------------------------------
+
+    @property
+    def window_width(self) -> int:
+        return int(self._cfg["window"]["width"])
+
+    @window_width.setter
+    def window_width(self, value: int) -> None:
+        self._cfg["window"]["width"] = str(value)
+        self._save()
+
+    @property
+    def window_height(self) -> int:
+        return int(self._cfg["window"]["height"])
+
+    @window_height.setter
+    def window_height(self, value: int) -> None:
+        self._cfg["window"]["height"] = str(value)
+        self._save()
+
+    @property
+    def window_x(self) -> int:
+        return int(self._cfg["window"]["x"])
+
+    @window_x.setter
+    def window_x(self, value: int) -> None:
+        self._cfg["window"]["x"] = str(value)
+        self._save()
+
+    @property
+    def window_y(self) -> int:
+        return int(self._cfg["window"]["y"])
+
+    @window_y.setter
+    def window_y(self, value: int) -> None:
+        self._cfg["window"]["y"] = str(value)
         self._save()
 
     # ------------------------------------------------------------------

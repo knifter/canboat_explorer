@@ -29,7 +29,9 @@ _CANLOG_FILTER     = "CAN Log (*.canlog);;All files (*)"
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.resize(1200, 700)
+        self.resize(settings.window_width, settings.window_height)
+        if settings.window_x >= 0 and settings.window_y >= 0:
+            self.move(settings.window_x, settings.window_y)
 
         self._reader: CanReader | None = None
         self._frame_queue: queue.Queue[RawFrame] = queue.Queue()
@@ -376,4 +378,9 @@ class MainWindow(QMainWindow):
         if self._reader:
             self._reader.stop()
         self._store.log.close()
+        g = self.geometry()
+        settings.window_width  = g.width()
+        settings.window_height = g.height()
+        settings.window_x      = g.x()
+        settings.window_y      = g.y()
         super().closeEvent(event)
