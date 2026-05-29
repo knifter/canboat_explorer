@@ -1,6 +1,6 @@
 # Canboat Explorer
 
-A desktop application for exploring, debugging, and recording CAN / NMEA 2000 bus traffic received via python-can. Currently only tested with the Waveshare USB-CAN-A adapter.
+A desktop application for exploring, debugging, and recording CAN / NMEA 2000 bus traffic received via python-can. Currently only tested with the Waveshare USB-CAN-A (~25 usd) and cheap AliExpress PCAN clones (~8 usd) adapters.
 
 ![tab4](images/tab4.png "Messsages overview")
 
@@ -17,12 +17,11 @@ A desktop application for exploring, debugging, and recording CAN / NMEA 2000 bu
 - A live NMEA 2000 bus (default bitrate: 250 kbps)
 
 ## Installation
+### Release
+Just download the pre-build .exe file from the latest Release to the right. Settings and data/ files are stored next to the executable.
 
-```
-pip install -e .
-```
-
-Or with uv:
+### From source
+With uv:
 
 ```
 uv pip install -e .
@@ -31,7 +30,7 @@ uv pip install -e .
 ## Running
 
 ```
-canboat_explorer
+uv run canboat_explorer
 ```
 
 Settings are written to `canboat_explorer.ini` at the project root on first run. Session logs are saved to `data/` next to the project root.
