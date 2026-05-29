@@ -181,6 +181,34 @@ class MainWindow(QMainWindow):
         self._status_label = QLabel(f"Disconnected — {PGN_COUNT} PGNs loaded")
         sb.addWidget(self._status_label)
 
+        self._bus_label = QLabel()
+        sb.addPermanentWidget(self._bus_label)
+
+        self._bus_timer = QTimer(self)
+        self._bus_timer.setInterval(1000)
+        self._bus_timer.timeout.connect(self._update_bus_indicator)
+        self._bus_timer.start()
+        self._update_bus_indicator()
+
+    def _update_bus_indicator(self) -> None:
+        bitrate  = settings.last_can_baud
+        rate_str = f"{bitrate // 1000} kbps" if bitrate else "—"
+        active   = self._reader is not None and not self._reader.is_paused
+        if not active:
+            self._bus_label.setText(f"Bus: {rate_str}")
+            self._bus_label.setStyleSheet("")
+            return
+        util = self._store.bus_utilization(bitrate)
+        if util is None:
+            self._bus_label.setText(f"Bus: {rate_str}")
+            self._bus_label.setStyleSheet("")
+            return
+        pct  = f"{util:.2f}" if util < 5.0 else f"{util:.1f}"
+        high = util > 50.0
+        prefix = "⚠ " if high else ""
+        self._bus_label.setText(f"{prefix}Bus: {pct} % @ {rate_str}")
+        self._bus_label.setStyleSheet("color: #d24a4a;" if high else "")
+
     # ------------------------------------------------------------------
     # Queue drain timer
     # ------------------------------------------------------------------

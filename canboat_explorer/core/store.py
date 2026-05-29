@@ -96,6 +96,9 @@ _DEVICE_INFO_PGNS = {
     126996,  # Product Information
 }
 
+# Rolling window (seconds) used by bus_utilization().
+_BUS_WINDOW_S = 5.0
+
 
 class DataStore:
     def __init__(self, log: SessionLog, sidecar_path: Path) -> None:
@@ -326,6 +329,23 @@ class DataStore:
 
     def pgn_sa_name(self, pgn: int, sa: int) -> str:
         return self.pgn_sa_names.get((pgn, sa)) or pgn_name(pgn)
+
+    def bus_utilization(self, bitrate: int, window_s: float = _BUS_WINDOW_S) -> float | None:
+        """Bus utilization (%) over the last `window_s` seconds of captured frames.
+
+        Iterates backwards over `self.frames` from the most recent until the
+        timestamp falls outside the window, then divides accumulated bits by
+        (window_s × bitrate). Returns None if no frames or bitrate ≤ 0.
+        """
+        if not self.frames or bitrate <= 0:
+            return None
+        cutoff = self.frames[-1].timestamp - window_s
+        total  = 0
+        for f in reversed(self.frames):
+            if f.timestamp < cutoff:
+                break
+            total += f.bits
+        return total / (window_s * bitrate) * 100.0
 
     def get_user_flag_by_arb(self, arb_id: int) -> Priority:
         return self._flags.get(f"a:{arb_id}")  # type: ignore[return-value]

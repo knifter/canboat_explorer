@@ -10,11 +10,37 @@ if TYPE_CHECKING:
 
 
 class RawFrame(can.Message):
-    __slots__ = ('n2k_msg',)
+    __slots__ = ('n2k_msg', 'bits')
 
     def __init__(self, *args, n2k_msg: "N2KMessage | None" = None, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.n2k_msg = n2k_msg
+        self.bits    = self._compute_bits()
+
+    def _compute_bits(self) -> int:
+        """Approximate number of bits this CAN frame occupies on the wire.
+
+        Counts framing overhead (SOF / arbitration / control / CRC / ACK / EOF / IFS)
+        plus the data bytes, plus an average bit-stuffing allowance of ~1 in 5 over
+        the stuffable range. Used for bus-utilization calculations.
+
+        Error frames return 0 (they consume bus time but in non-standard quantities).
+        """
+        if self.is_error_frame:
+            return 0
+        dlc = max(0, min(self.dlc, 8))
+        data_bits = 8 * dlc
+        if self.is_extended_id:
+            # SOF(1) + base ID(11) + SRR(1) + IDE(1) + ext ID(18) + RTR(1) + r1(1) + r0(1) + DLC(4) = 39
+            # + CRC(15) + CRC delim(1) + ACK(2) + EOF(7) + IFS(3) = 28  →  67 + 8·DLC
+            base      = 67
+            stuffable = 34 + data_bits
+        else:
+            # SOF(1) + ID(11) + RTR(1) + IDE(1) + r0(1) + DLC(4) = 19
+            # + CRC(15) + CRC delim(1) + ACK(2) + EOF(7) + IFS(3) = 28  →  47 + 8·DLC
+            base      = 47
+            stuffable = 19 + data_bits
+        return base + data_bits + stuffable // 5
 
     @classmethod
     def wrap(cls, msg: can.Message) -> "RawFrame":
