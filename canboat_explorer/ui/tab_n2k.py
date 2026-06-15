@@ -39,7 +39,7 @@ _COLS_ACCUM: list[tuple[str, str]] = [
     ("Length",       "Payload length of the most recent message in bytes."),
     ("Last Payload", "Assembled payload bytes of the most recent message (hex)."),
     ("Count",        "Number of messages received for this PGN + SA combination."),
-    ("Interval",     "Average interval between messages (ms) = (last − first) / (count − 1).\nRequires at least 2 messages."),
+    ("Interval",     "Average interval between messages (ms), over the last 25 messages.\nRequires at least 2 messages."),
 ]
 
 _GROUP_OPTIONS = ["None", "PGN + SA"]

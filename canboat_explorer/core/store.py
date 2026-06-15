@@ -22,26 +22,37 @@ from canboat_explorer.core.session_log import SessionLog
 
 Priority = Literal["ignore", "highlight", "warning", "error"] | None
 
+# interval_ms averages over the most recent RATE_WINDOW messages, so the rate
+# tracks current bus behaviour rather than the session-long average.
+RATE_WINDOW = 25
+
 
 @dataclass
 class FrameAccumEntry:
     """Per-(grouping-key) tally of raw CAN frames."""
     last_frame: RawFrame
     count: int
-    first_ts: float = 0.0
+    _recent_ts: deque = field(default_factory=lambda: deque(maxlen=RATE_WINDOW))
 
     def __post_init__(self) -> None:
-        if self.first_ts == 0.0:
-            self.first_ts = self.last_frame.timestamp
+        self._recent_ts.append(self.last_frame.timestamp)
+
+    def update(self, frame: RawFrame) -> None:
+        self.last_frame = frame
+        self.count += 1
+        self._recent_ts.append(frame.timestamp)
+
+    def reset_window(self) -> None:
+        self._recent_ts.clear()
 
     @property
     def interval_ms(self) -> float | None:
-        if self.count < 2:
+        if len(self._recent_ts) < 2:
             return None
-        elapsed = self.last_frame.timestamp - self.first_ts
+        elapsed = self._recent_ts[-1] - self._recent_ts[0]
         if elapsed <= 0:
             return None
-        return elapsed / (self.count - 1) * 1000
+        return elapsed / (len(self._recent_ts) - 1) * 1000
 
 
 @dataclass
@@ -49,20 +60,27 @@ class MessageAccumEntry:
     """Per-(pgn, sa) tally of assembled NMEA 2000 messages."""
     last_msg: N2KMessage
     count: int
-    first_ts: float = 0.0
+    _recent_ts: deque = field(default_factory=lambda: deque(maxlen=RATE_WINDOW))
 
     def __post_init__(self) -> None:
-        if self.first_ts == 0.0:
-            self.first_ts = self.last_msg.timestamp
+        self._recent_ts.append(self.last_msg.timestamp)
+
+    def update(self, msg: N2KMessage) -> None:
+        self.last_msg = msg
+        self.count += 1
+        self._recent_ts.append(msg.timestamp)
+
+    def reset_window(self) -> None:
+        self._recent_ts.clear()
 
     @property
     def interval_ms(self) -> float | None:
-        if self.count < 2:
+        if len(self._recent_ts) < 2:
             return None
-        elapsed = self.last_msg.timestamp - self.first_ts
+        elapsed = self._recent_ts[-1] - self._recent_ts[0]
         if elapsed <= 0:
             return None
-        return elapsed / (self.count - 1) * 1000
+        return elapsed / (len(self._recent_ts) - 1) * 1000
 
 
 @dataclass
@@ -187,8 +205,7 @@ class DataStore:
                 dev.seen_pgns.add(n2k_msg.pgn)
                 self._sa_pgn_collisions_cache = None
             else:
-                entry.last_msg = n2k_msg
-                entry.count += 1
+                entry.update(n2k_msg)
 
         if decoded is not None:
             qualifier = tuple(sorted(
@@ -211,8 +228,7 @@ class DataStore:
         if entry is None:
             self.by_arb_id[msg.arbitration_id] = FrameAccumEntry(msg, 1)
         else:
-            entry.last_frame = msg
-            entry.count += 1
+            entry.update(msg)
 
         if n2k is not None:
             key = (n2k.pgn, n2k.sa)
@@ -220,15 +236,13 @@ class DataStore:
             if entry is None:
                 self.by_pgn_sa[key] = FrameAccumEntry(msg, 1)
             else:
-                entry.last_frame = msg
-                entry.count += 1
+                entry.update(msg)
 
             entry = self.by_pgn.get(n2k.pgn)
             if entry is None:
                 self.by_pgn[n2k.pgn] = FrameAccumEntry(msg, 1)
             else:
-                entry.last_frame = msg
-                entry.count += 1
+                entry.update(msg)
 
     # ------------------------------------------------------------------
     # Device registry (PGN 60928 / 126464 / 126996)
@@ -429,6 +443,21 @@ class DataStore:
         self.undecoded_msg_count = 0
         self._sa_tx_by_pgn_cache      = None
         self._sa_pgn_collisions_cache = None
+
+    def reset_rate_windows(self) -> None:
+        """Clear every entry's rate window so interval_ms reflects only messages
+        received from now on. Called on connect: the (append-mode) session log
+        loaded at startup leaves stale timestamps — and a multi-hour gap between
+        sessions — in the windows, which would skew the live rate until 25 fresh
+        messages flushed them out. Counts and last values are left intact."""
+        for entry in self.by_arb_id.values():
+            entry.reset_window()
+        for entry in self.by_pgn_sa.values():
+            entry.reset_window()
+        for entry in self.by_pgn.values():
+            entry.reset_window()
+        for entry in self.n2k_by_pgn_sa.values():
+            entry.reset_window()
 
     def clear(self) -> None:
         """Archive the current log, reset in-memory state, start fresh."""

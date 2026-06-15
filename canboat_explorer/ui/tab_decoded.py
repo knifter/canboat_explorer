@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
 
 from nmea2000 import FieldTypes
 
-from canboat_explorer.core.store import DataStore
+from canboat_explorer.core.store import DataStore, RATE_WINDOW
 
 _MAX_HISTORY = 20
 _SKIP_TYPES  = {FieldTypes.RESERVED, FieldTypes.SPARE}
@@ -43,18 +43,18 @@ def _qualifier_label(decoded_msg) -> str:
 
 
 def _rate_label(dq: deque) -> str:
-    if len(dq) < 2:
+    n = min(len(dq), RATE_WINDOW)
+    if n < 2:
         return ""
     try:
-        newest = dq[0].timestamp
-        oldest = dq[-1].timestamp
-        if hasattr(newest, 'total_seconds'):
-            elapsed = (newest - oldest).total_seconds()
-        else:
-            elapsed = float(newest) - float(oldest)
+        # dq[0] is newest (appendleft); window over the most recent RATE_WINDOW.
+        # The difference is a timedelta for datetime timestamps, a float for
+        # float timestamps — test the difference, not the timestamp itself.
+        delta   = dq[0].timestamp - dq[n - 1].timestamp
+        elapsed = delta.total_seconds() if hasattr(delta, 'total_seconds') else float(delta)
         if elapsed <= 0:
             return ""
-        return f"{elapsed / (len(dq) - 1) * 1000:.0f} ms"
+        return f"{elapsed / (n - 1) * 1000:.0f} ms"
     except Exception:
         return ""
 

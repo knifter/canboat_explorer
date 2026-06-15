@@ -51,7 +51,7 @@ _COLS_ACCUM: list[tuple[str, str]] = [
     ("Seq",       "Fast-packet sequence counter (bits 7–5 of byte 0). Empty for non-N2K frames."),
     ("Frame",     "Fast-packet frame index (bits 4–0 of byte 0). Empty for non-N2K frames."),
     ("Count",     "Number of frames received with this arbitration ID since the session started."),
-    ("Interval",  "Average interval between frames (ms) = (last − first timestamp) / (count − 1).\nRequires at least 2 frames. Converges over time — early readings may be inaccurate."),
+    ("Interval",  "Average interval between frames (ms), over the last 25 frames.\nRequires at least 2 frames."),
 ]
 
 _SEP_COL       = 9    # index of the "|" separator column in _COLS_TIME

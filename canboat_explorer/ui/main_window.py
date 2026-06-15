@@ -364,6 +364,9 @@ class MainWindow(QMainWindow):
             serial_baud=settings.last_serial_baud,
             can_baud=settings.last_can_baud,
         )
+        # Drop stale timestamps loaded from the session log so the live rate is
+        # measured from this connection onward, not skewed by the session gap.
+        self._store.reset_rate_windows()
         self._reader.start()
 
         self._connect_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserStop))
