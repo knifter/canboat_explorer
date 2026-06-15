@@ -106,6 +106,10 @@ class DecodedTab(QWidget):
 
         splitter.addWidget(right)
         splitter.setSizes([350, 650])
+        # The signal tree is width-capped (see _fit_left_pane); surplus width
+        # goes to the field table on the right rather than widening the tree.
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -117,6 +121,7 @@ class DecodedTab(QWidget):
 
     def on_messages_added(self) -> None:
         any_changed = False
+        created     = False
         for key, dq in self._store.decoded_by_key.items():
             if not dq:
                 continue
@@ -125,12 +130,15 @@ class DecodedTab(QWidget):
                 continue   # this stream got no new message since the last drain
             if key not in self._leaf_items:
                 self._create_entry(key, dq[0])
+                created = True
             leaf = self._leaf_items[key]
             leaf.setText(1, _rate_label(dq))
             if leaf.isExpanded():
                 self._rebuild_history(leaf, dq)
             self._leaf_last_ts[key] = head_ts
             any_changed = True
+        if created:
+            self._fit_left_pane()
         if any_changed:
             self._refresh_selection()
 
@@ -215,12 +223,22 @@ class DecodedTab(QWidget):
             leaf.addChild(child)
 
     def _on_item_expanded(self, item: QTreeWidgetItem) -> None:
-        if item.data(0, _ROLE_TYPE) != "leaf":
-            return
-        key = item.data(0, _ROLE_KEY)
-        dq  = self._store.decoded_by_key.get(key)
-        if dq:
-            self._rebuild_history(item, dq)
+        if item.data(0, _ROLE_TYPE) == "leaf":
+            key = item.data(0, _ROLE_KEY)
+            dq  = self._store.decoded_by_key.get(key)
+            if dq:
+                self._rebuild_history(item, dq)
+        # Newly-revealed rows can be wider/deeper than what was visible before.
+        self._fit_left_pane()
+
+    def _fit_left_pane(self) -> None:
+        # Allow the Signal column to be up to ~130% of its content width, then
+        # stop: cap the tree's max width there so extra horizontal space goes to
+        # the field table on the right instead of an over-wide Signal column.
+        sig  = int(self._tree.sizeHintForColumn(0) * 1.3)
+        rate = self._tree.sizeHintForColumn(1)
+        # + fixed allowance for the vertical scrollbar, frame and padding.
+        self._tree.setMaximumWidth(sig + rate + 2 * self._tree.frameWidth() + 32)
 
     # ------------------------------------------------------------------
     # Selection
