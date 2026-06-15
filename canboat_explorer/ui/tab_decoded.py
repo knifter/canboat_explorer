@@ -73,12 +73,14 @@ class DecodedTab(QWidget):
 
         # ---- left: signal tree ----
         self._tree = QTreeWidget()
-        self._tree.setColumnCount(2)
-        self._tree.setHeaderLabels(["Signal", "Rate"])
+        self._tree.setColumnCount(3)
+        self._tree.setHeaderLabels(["Signal", "PGN", "Rate"])
+        # Signal stretches to fill spare width (capped in _fit_left_pane so it
+        # never gets ugly-long); PGN and Rate are sized to ~130% of their content
+        # there (Interactive, so the explicit width sticks) for some breathing room.
         self._tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self._tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        # Otherwise the last section (Rate) is force-stretched to fill the panel;
-        # we want Rate to fit its content and Signal to absorb the spare width.
+        self._tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
+        self._tree.header().setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
         self._tree.header().setStretchLastSection(False)
         self._tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self._tree.itemSelectionChanged.connect(self._on_selection_changed)
@@ -132,7 +134,7 @@ class DecodedTab(QWidget):
                 self._create_entry(key, dq[0])
                 created = True
             leaf = self._leaf_items[key]
-            leaf.setText(1, _rate_label(dq))
+            leaf.setText(2, _rate_label(dq))
             if leaf.isExpanded():
                 self._rebuild_history(leaf, dq)
             self._leaf_last_ts[key] = head_ts
@@ -166,7 +168,7 @@ class DecodedTab(QWidget):
         # Level 1: PGN group
         pgn_item = self._pgn_items.get(pgn)
         if pgn_item is None:
-            pgn_item = QTreeWidgetItem([decoded_msg.description or f"PGN {pgn}", ""])
+            pgn_item = QTreeWidgetItem([decoded_msg.description or f"PGN {pgn}", str(pgn), ""])
             bold = QFont()
             bold.setBold(True)
             pgn_item.setFont(0, bold)
@@ -177,7 +179,7 @@ class DecodedTab(QWidget):
 
         if not qualifier_tuple:
             # No qualifier — SA node is the leaf
-            leaf = QTreeWidgetItem([f"SA:{sa}", ""])
+            leaf = QTreeWidgetItem([f"SA:{sa}", "", ""])
             leaf.setData(0, _ROLE_TYPE,       "leaf")
             leaf.setData(0, _ROLE_KEY,        key)
             leaf.setData(0, _ROLE_HISTORICAL, False)
@@ -190,7 +192,7 @@ class DecodedTab(QWidget):
             sa_key   = (pgn, sa)
             sa_item  = self._sa_items.get(sa_key)
             if sa_item is None:
-                sa_item = QTreeWidgetItem([f"SA:{sa}", ""])
+                sa_item = QTreeWidgetItem([f"SA:{sa}", "", ""])
                 sa_item.setData(0, _ROLE_TYPE,   "sa")
                 sa_item.setData(0, _ROLE_PGN,    pgn)
                 sa_item.setData(0, _ROLE_SA_KEY, sa_key)
@@ -200,7 +202,7 @@ class DecodedTab(QWidget):
 
             # Level 3: qualifier leaf
             qualifier = _qualifier_label(decoded_msg) or str(qualifier_tuple)
-            leaf = QTreeWidgetItem([qualifier, ""])
+            leaf = QTreeWidgetItem([qualifier, "", ""])
             leaf.setData(0, _ROLE_TYPE,       "leaf")
             leaf.setData(0, _ROLE_KEY,        key)
             leaf.setData(0, _ROLE_HISTORICAL, False)
@@ -232,13 +234,17 @@ class DecodedTab(QWidget):
         self._fit_left_pane()
 
     def _fit_left_pane(self) -> None:
-        # Allow the Signal column to be up to ~130% of its content width, then
-        # stop: cap the tree's max width there so extra horizontal space goes to
-        # the field table on the right instead of an over-wide Signal column.
-        sig  = int(self._tree.sizeHintForColumn(0) * 1.3)
-        rate = self._tree.sizeHintForColumn(1)
+        # Give every column ~130-140% of its content for breathing room: Signal
+        # stretches up to its cap, PGN and Rate get an explicit width. The tree
+        # is capped at their sum so it never gets ugly-long and surplus width
+        # goes to the field table on the right.
+        sig  = int(self._tree.sizeHintForColumn(0) * 1.4)
+        pgn  = int(self._tree.sizeHintForColumn(1) * 1.3)
+        rate = int(self._tree.sizeHintForColumn(2) * 1.3)
+        self._tree.setColumnWidth(1, pgn)
+        self._tree.setColumnWidth(2, rate)
         # + fixed allowance for the vertical scrollbar, frame and padding.
-        self._tree.setMaximumWidth(sig + rate + 2 * self._tree.frameWidth() + 32)
+        self._tree.setMaximumWidth(sig + pgn + rate + 2 * self._tree.frameWidth() + 32)
 
     # ------------------------------------------------------------------
     # Selection
