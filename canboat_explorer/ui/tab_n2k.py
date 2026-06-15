@@ -45,6 +45,11 @@ _COLS_ACCUM: list[tuple[str, str]] = [
 _GROUP_OPTIONS = ["None", "PGN + SA"]
 # Index 0 = time view (no grouping); 1 = accumulated by PGN + SA
 
+# The (Last) Payload column — same index in both _COLS_TIME and _COLS_ACCUM.
+# It stretches to absorb spare width and is the first to give way when the
+# window is too narrow, so the trailing columns (Count/Interval) stay visible.
+_PAYLOAD_COL = 6
+
 
 def _fmt_time(ts: float) -> str:
     t = time.localtime(ts)
@@ -257,7 +262,14 @@ class N2KTab(QWidget):
 
     def _enable_autosize(self) -> None:
         hdr = self._view.horizontalHeader()
-        hdr.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        model = self._view.model()
+        if model is None:
+            return
+        for c in range(model.columnCount()):
+            mode = (QHeaderView.ResizeMode.Stretch if c == _PAYLOAD_COL
+                    else QHeaderView.ResizeMode.ResizeToContents)
+            hdr.setSectionResizeMode(c, mode)
+        hdr.setStretchLastSection(False)
 
     def _on_group_selected(self, index: int) -> None:
         if index == 0:
@@ -265,6 +277,7 @@ class N2KTab(QWidget):
         else:
             self._accum_model.refresh()
             self._view.setModel(self._accum_model)
+        self._enable_autosize()
         self._update_count()
 
     def _update_count(self) -> None:
