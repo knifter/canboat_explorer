@@ -392,3 +392,10 @@ class RawCanTab(QWidget):
 
     def has_warnings(self) -> bool:
         return self._store.oob_frame_count > 0
+
+    def warning_text(self) -> str:
+        n = self._store.oob_frame_count
+        if n == 0:
+            return ""
+        return (f"{n:,} frame(s) could not be linked to an NMEA 2000 message "
+                "(out-of-band / non-N2K traffic). Count is cumulative for the session.")

@@ -112,6 +112,14 @@ class NetworkTab(QWidget):
     def has_warnings(self) -> bool:
         return bool(self._store.sa_pgn_collisions)
 
+    def warning_text(self) -> str:
+        cols = self._store.sa_pgn_collisions
+        if not cols:
+            return ""
+        pgns = ", ".join(str(p) for p in sorted(cols))
+        return ("Same PGN transmitted from multiple source addresses "
+                f"(marked ⚠ in the tree): {pgns}.")
+
     # ------------------------------------------------------------------
     # Data helpers
     # ------------------------------------------------------------------

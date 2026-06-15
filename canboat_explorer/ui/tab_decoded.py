@@ -158,6 +158,9 @@ class DecodedTab(QWidget):
     def has_warnings(self) -> bool:
         return False
 
+    def warning_text(self) -> str:
+        return ""
+
     # ------------------------------------------------------------------
     # Tree management
     # ------------------------------------------------------------------

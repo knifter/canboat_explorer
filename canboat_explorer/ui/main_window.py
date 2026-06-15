@@ -165,10 +165,15 @@ class MainWindow(QMainWindow):
 
     def _update_tab_warnings(self) -> None:
         tabs = (self._tab_raw, self._tab_n2k, self._tab_network, self._tab_decoded)
+        bar  = self._tabs.tabBar()
         for idx, (tab, name) in enumerate(zip(tabs, self._TAB_NAMES)):
-            label = f"⚠ {name}" if tab.has_warnings() else name
+            warn  = tab.has_warnings()
+            label = f"⚠ {name}" if warn else name
             if self._tabs.tabText(idx) != label:
                 self._tabs.setTabText(idx, label)
+            tip = tab.warning_text() if warn else ""
+            if bar.tabToolTip(idx) != tip:
+                bar.setTabToolTip(idx, tip)
 
     # ------------------------------------------------------------------
     # Status bar

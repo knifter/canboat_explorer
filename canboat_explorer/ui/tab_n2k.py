@@ -314,3 +314,18 @@ class N2KTab(QWidget):
 
     def has_warnings(self) -> bool:
         return (self._store.incomplete_msg_count + self._store.undecoded_msg_count) > 0
+
+    def warning_text(self) -> str:
+        inc = self._store.incomplete_msg_count
+        und = self._store.undecoded_msg_count
+        if inc + und == 0:
+            return ""
+        parts = []
+        if inc:
+            parts.append(f"{inc:,} incomplete fast-packet sequence(s)")
+        if und:
+            parts.append(f"{und:,} message(s) the decoder could not parse")
+        return ("Since capture started: " + "; ".join(parts) + ".\n"
+                "Counts are cumulative for the session. The grouped view shows "
+                "only the latest message per PGN+SA, so a flagged message may not "
+                "be visible — switch Group by to the time view to find it.")
