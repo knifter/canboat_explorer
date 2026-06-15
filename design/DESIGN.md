@@ -19,6 +19,7 @@ A desktop application for exploring, debugging, and recording CAN / NMEA 2000 bu
 - **Raw frame type: `RawFrame(can.Message)`** — python-can's `can.Message` uses `__slots__` and forbids dynamic attributes, so per-frame state (specifically: a back-link to the assembled `N2KMessage` the frame contributed to) cannot be attached directly. We subclass with one extra slot: `class RawFrame(can.Message): __slots__ = ('n2k_msg',)`. `RawFrame` is constructed at every ingress (`SessionLog.decode()` and at `store._add()` entry from the queue). Since `RawFrame` IS-A `can.Message`, all consumers — including the nmea2000 library — see it as a normal CAN frame. `is_error_frame` surfaces real CAN bus errors (collision, CRC fail, etc.); DLC is trusted as declared length; `recv()` exceptions signal a connection state change to the UI rather than entering the data stream.
 - **No `N2KFrame` wrapper; central arb-ID parser** — PGN, SA, priority, destination (PDU1), group extension (PDU2), `is_fast`, and the FP `seq`/`frame_idx` are extracted by `n2k_frame_info(msg)` in `core/n2k_frame_info.py`, which returns a `NamedTuple` (`N2KFrameInfo`) joining bit-level arb-ID parsing with catalogue data (description, `is_fast`). All consumers — `store._add()`, `FastPacketReassembler.feed()`, `tab_raw_can` — use this single function instead of cherry-picking arb-ID bits inline.
 - **PGN catalogue: `core/pgn_catalogue.py`** — bundled `canboat_explorer/canboat.json` is the upstream PGN database that the nmea2000 library is generated from (Apache 2.0, © 2009-2025 Kees Verruijt). Parsed once at startup into `PGN_LOOKUP: dict[int, dict]` using first-occurrence-wins (canboat lists variants per PGN; only one entry per PGN is kept). `pgn_name(pgn)` returns the generic description, `""` if unknown. The copyright notice must appear in the About dialog. Source: https://github.com/canboat/canboat/blob/master/docs/canboat.json
+- **Global filter: `core/filter.py`** — `FilterSpec` dataclass + `FilterSpec.matches(*, pgn, sa, text="", is_warning=False, is_error=False, is_highlighted=False, is_ignored=False) -> bool`. Pure, Qt-free, unit-testable. The filter is **global** — a single `FilterSpec` is shared across all four tabs. The UI populates the spec's fields **directly from discrete inputs** (PGN, SA, free-text + flag toggles); there is no query-string grammar — a smart-query box was considered and dropped as overkill for now. Each tab extracts the fields it can supply from its own row/node and calls `matches`; per-tab flag derivation (already in `tab_raw_can._flag_for` / `tab_n2k._flag_for_message`) is reused — the `FilterSpec` never recomputes flags. A field that a tab cannot provide is treated as **pass-through** in that tab, so the global filter never blanks a tab on an inapplicable key. Scope is the common spine only — PGN / SA / text / flag. Arbitration-ID and priority filtering, raw-byte pattern matching (Tab 1), and decoded field-value predicates (Tab 4) are explicitly **out of scope** for now; if added they would be tab-local refinements layered under the global filter (see Ideas).
 - **SA-keyed PGN name cache: `DataStore.pgn_sa_names`** — `dict[tuple[int,int], str]` populated reactively from `decoded.description` on every successful decode. `store.pgn_sa_name(pgn, sa)` returns the variant-resolved name if known, else falls back to `pgn_catalogue.pgn_name(pgn)`. Tabs 1/2 use this in preference to the catalogue alone wherever SA is known — surfaces manufacturer-specific variant names like "Simnet: Temperature" vs "Yamaha: Temperature". (SA-address-collision detection — same PGN producing different variant descriptions across SAs — has moved to Tab 3, see "Visual priority system" below.)
 - **Decode success/failure is a per-message property** — `decoded: bool` on `N2KMessage`, set from the decoder's return on emit (`True` if the library returned a `NMEA2000Message`, `False` if `None`). Replaces the previous global `_unknown_pgns`/`_known_pgns` PGN-level tracking. Row-level flagging in Tab 2 reads this directly. Note: the library returns `None` for any of "could not decode", "filtered out", or "PGN unsupported" — for row-flagging purposes they're equivalent ("the bytes did not turn into structured data on this row").
 - **Fast-packet completion is a per-message property** — `N2KMessage.is_complete: bool` (defaults `True`; set `False` when our `FastPacketReassembler` emits a stale-timed-out buffer). Replaces the previous global `_incomplete_fp_pgns`/`_complete_fp_pgns` sets.
@@ -161,12 +162,28 @@ Bus Layer
   - *Clear*: confirms with the user, truncates the active log to zero bytes, resets all in-memory state.
   - On startup, `session.canlog` is reopened if it exists (crash continuity).
 - **Pause / Continue** — suspend and resume live frame capture without disconnecting the adapter
+- **Global filter bar** — a single filter applied across all four tabs, shown above the tab widget. Always visible; `Ctrl+F` focuses the free-text search field. A dedicated **Clear** button resets the whole filter (all inputs + flag toggles) to empty.
+
+  *Input — discrete fields + flag toggles (no query grammar):*
+  - **PGN** — match a single PGN (comma list = OR, e.g. `130306,129025`).
+  - **SA** — match a source address (comma list = OR).
+  - **Free-text** — case-insensitive substring against the row's text (PGN description, resolved variant name, manufacturer, device name).
+  - **Flag quick-toggle buttons:**
+    - *Warnings*, *Errors*, *Highlighted* — restrict to rows carrying that flag class. When more than one is active they combine as **OR**; when none are active there is no flag restriction. Warnings/Errors are auto-flags meaningful in Tabs 1–2 (pass-through in 3–4); Highlighted is a user flag and applies wherever a row maps to a PGN/SA.
+    - *Hide ignored* — independent suppressor: removes rows whose user flag is `ignore`. Composes with (ANDed into) every other condition, complementing the existing soft-fade.
+  - **Result:** `visible = pgn ∧ sa ∧ text ∧ flagToggles ∧ ¬(hideIgnored ∧ ignored)`. Empty inputs are pass-through.
+
+  *Behaviour per tab:*
+  - **Table tabs (1, 2):** non-matching rows hidden in both time and accumulated views (groups hidden in accum). Models keep a filtered source-index array; new live frames are predicate-tested once and appended incrementally (O(1)); a filter edit triggers a debounced full rebuild (O(n)).
+  - **Tree tabs (3, 4):** non-matching nodes pruned; a parent node stays if any descendant matches.
+  - A "showing X of Y" count is displayed in the bar.
+
+  *State:* held in a single shared `FilterSpec` (see Decisions); the bar emits a debounced `changed` signal each tab subscribes to. Filter is transient view state — **not** persisted across sessions (unlike flags/highlights).
 
 ---
 
 ## Want-to-haves
 
-- **Filter / search bar** — filter rows in any tab by PGN, arbitration ID, SA, or text
 - **Flag tooltip detail** — hover over any auto-flagged row to see the full reason string (moved to requirements as part of the revised flag system)
 - **CSV export** — user-triggered export of current session or a saved file to CSV, or better yet: use nmea2000 write file format, whatever that supports so other applications can also read this data.
 - **Data Sources** — Support other data sources/usb-adapters. TCP/IP? SignalK? 
@@ -183,6 +200,7 @@ Written down to lightly influence architecture; not committed.
 - **Pattern / structure guesser** — for unknown messages, highlight byte positions that vary vs. stay constant across frames; aids reverse engineering
 - **Timeline / rate graph** — sparkline per PGN showing message rate over time
 - **Network topology visual** — graphical bus diagram (nodes on a backbone line); revisit once typical network shape is known from real captures
+- **Tab-local refinement filters** — extend the global filter with predicates only one tab can express: raw-byte / byte-pattern match in Tab 1, decoded field-value predicates in Tab 4. Layered *under* the global filter (ANDed), not a replacement for it. Also the deferred global dimensions: arbitration-ID and priority. A smart-query grammar (`pgn:… sa:… prio:<3`) could be revisited here if the discrete-field bar proves too limiting.
 
 ---
 
@@ -204,8 +222,9 @@ Written down to lightly influence architecture; not committed.
 14. ✅ **Auto-flag: unknown PGN (warning) — original implementation** — PGN-level auto-flag with `_unknown_pgns`/`_known_pgns` tracking. Superseded by item 15.
 15. ✅ **Per-row flag refactor** — replaced PGN-level auto-flag state (`_unknown_pgns`, `_known_pgns`, `_unknown_arbs`, `_incomplete_fp_pgns`, `_complete_fp_pgns`, `_multi_sa_pgns`, `_collision_pgns`) with per-frame and per-message signals. Subclassed `can.Message` as `RawFrame` with a `n2k_msg` back-link slot; extended `N2KMessage` with `decoded: bool`, `is_complete: bool`, and `frames: list[RawFrame]`; `FastPacketReassembler._Buffer` tracks contributing frames and emits them on the message; nmea2000 decoder result aligned with FP emit by call timing. Row flagging in Tabs 1/2 reads frame/message state directly; collision detection lives in Tab 3 as sole owner (covering both actual multi-SA and TX-advertised potential collisions). Tab headers gained `⚠` markers backed by three store counters. See `design/store-data-audit.md` for the final state.
 16. ✅ **SA-keyed PGN name cache** — `DataStore.pgn_sa_names` populated reactively from `decoded.description`; `store.pgn_sa_name(pgn, sa)` falls back to `pgn_catalogue.pgn_name(pgn)`. (Cross-SA variant-collision detection moved to Tab 3 as part of item 15.)
-17. **Filter bar, CSV export** *(want-to-haves)*
-18. **Replay, annotations, pattern guesser** *(ideas — revisit post-core)*
+17. **Global filter bar** — `core/filter.py` (`FilterSpec` + `matches()`, pure/Qt-free, unit-tested); `FilterBar` widget above the tab widget with discrete PGN / SA / free-text inputs + Warnings/Errors/Highlighted/Hide-ignored toggles; filtered source-index arrays in the Tab 1/2 table models (incremental append on live frames, debounced rebuild on edit); node pruning in the Tab 3/4 trees; "showing X of Y" count; `Ctrl+F` focuses the free-text field; dedicated Clear button resets all inputs + toggles. Transient (not persisted).
+18. **CSV / nmea2000-format export** *(want-to-have)*
+19. **Replay, annotations, pattern guesser** *(ideas — revisit post-core)*
 
 ---
 
