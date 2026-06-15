@@ -23,6 +23,7 @@ jobs:
       - name: Build exe
         run: >
           pyinstaller --onefile --windowed --name canboat_explorer
+          --icon canboat_explorer/icon.ico
           --collect-all nmea2000 --collect-all PyQt6
           --collect-data canboat_explorer
           --collect-submodules can

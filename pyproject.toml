@@ -20,4 +20,4 @@ where = ["."]
 include = ["canboat_explorer*"]
 
 [tool.setuptools.package-data]
-canboat_explorer = ["canboat.json"]
+canboat_explorer = ["canboat.json", "icon.ico"]
