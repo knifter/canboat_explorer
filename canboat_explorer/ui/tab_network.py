@@ -16,7 +16,14 @@ _STALE_S    = 60.0
 _SECTION_FG = QColor("#aaaaaa")
 _STALE_FG   = QColor("#888888")
 _SEEN_FG    = QColor("#aaaaaa")
-_ROLE_SA    = Qt.ItemDataRole.UserRole
+_ROLE_SA      = Qt.ItemDataRole.UserRole
+_ROLE_FG0     = Qt.ItemDataRole.UserRole + 1   # cached foreground state, column 0
+_ROLE_FG1     = Qt.ItemDataRole.UserRole + 2   # cached foreground state, column 1
+_ROLE_SECTION = Qt.ItemDataRole.UserRole + 3   # section id on a header item
+_ROLE_PGN     = Qt.ItemDataRole.UserRole + 4   # pgn on a leaf item
+
+# Canonical ordering of section headers under an SA node.
+_SECTION_ORDER = {"tx": 0, "rx": 1, "ua": 2, "obs": 0}
 
 # PGNs that every N2K device sends as normal bookkeeping — excluded from
 # "Observed / not advertised" noise.
@@ -41,6 +48,14 @@ class NetworkTab(QWidget):
         self._last_n2k_count   = 0
         self._last_decoded_len = 0
         self._log_processed    = 0
+
+        # Persistent item registries — the tree is updated in place, never
+        # cleared, so selection / expansion / scroll / tooltips survive a
+        # refresh even under a flood of incoming messages.
+        self._sa_items:      dict[int, QTreeWidgetItem]              = {}
+        self._info_items:    dict[int, QTreeWidgetItem]              = {}
+        self._section_items: dict[tuple[int, str], QTreeWidgetItem]  = {}
+        self._pgn_items:     dict[tuple[int, str, int], QTreeWidgetItem] = {}
 
         splitter = QSplitter(Qt.Orientation.Vertical)
 
@@ -80,12 +95,16 @@ class NetworkTab(QWidget):
             return
         self._last_n2k_count   = n_n2k
         self._last_decoded_len = n_dec
-        self._rebuild_tree()
+        self._reconcile()
         self._append_log()
 
     def reset(self) -> None:
         self._tree.clear()
         self._log.clear()
+        self._sa_items.clear()
+        self._info_items.clear()
+        self._section_items.clear()
+        self._pgn_items.clear()
         self._last_n2k_count   = 0
         self._last_decoded_len = 0
         self._log_processed    = 0
@@ -120,119 +139,213 @@ class NetworkTab(QWidget):
         return f"{pgn_ref}: might be transmitted by multiple source addresses ({sa_list})"
 
     # ------------------------------------------------------------------
-    # Tree rebuild
+    # Tree reconcile (in-place — never clears the tree)
     # ------------------------------------------------------------------
 
-    def _rebuild_tree(self) -> None:
-        self._tree.clear()
+    def _reconcile(self) -> None:
         now        = time.time()
-        all_sa     = sorted(self._store.devices)
         collisions = self._store.sa_pgn_collisions
+        for sa in sorted(self._store.devices):
+            self._reconcile_sa(sa, self._store.devices[sa], collisions, now)
 
-        for sa in all_sa:
-            dev     = self._store.devices[sa]
-            has_ac  = dev.has_address_claim
-            last_ts = dev.last_seen_ts
-            stale   = last_ts > 0 and (now - last_ts) > _STALE_S
+    def _reconcile_sa(
+        self, sa: int, dev: DeviceInfo, collisions: set[int], now: float,
+    ) -> None:
+        has_ac = dev.has_address_claim
 
-            if dev.model:
-                label = f"SA:{sa}  —  {dev.model}"
-            elif has_ac:
-                label = f"SA:{sa}  —  (address claimed)"
-            else:
-                label = f"SA:{sa}  —  (seen only)"
+        if dev.model:
+            label = f"SA:{sa}  —  {dev.model}"
+        elif has_ac:
+            label = f"SA:{sa}  —  (address claimed)"
+        else:
+            label = f"SA:{sa}  —  (seen only)"
 
-            status  = f"silent {int(now - last_ts)}s" if stale else ""
-            sa_item = QTreeWidgetItem([label, status])
+        sa_item = self._sa_items.get(sa)
+        if sa_item is None:
+            sa_item = QTreeWidgetItem([label, ""])
             sa_item.setData(0, _ROLE_SA, sa)
             bold = QFont()
             bold.setBold(True)
             sa_item.setFont(0, bold)
-            if stale or not has_ac:
-                fg = _STALE_FG if stale else _SEEN_FG
-                sa_item.setForeground(0, QBrush(fg))
-                sa_item.setForeground(1, QBrush(fg))
-            self._tree.addTopLevelItem(sa_item)
+            self._tree.insertTopLevelItem(self._sa_insert_index(sa), sa_item)
+            sa_item.setExpanded(True)
+            self._sa_items[sa] = sa_item
+        elif sa_item.text(0) != label:
+            sa_item.setText(0, label)
 
-            info_line = dev.product_info_line
-            if info_line:
+        self._apply_sa_visual(sa_item, dev, now)
+
+        # ---- product info child (always first child) ----
+        info_line = dev.product_info_line
+        info_item = self._info_items.get(sa)
+        if info_line:
+            if info_item is None:
                 info_item = QTreeWidgetItem([info_line, ""])
                 italic = QFont()
                 italic.setItalic(True)
                 info_item.setFont(0, italic)
                 info_item.setFlags(info_item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
-                sa_item.addChild(info_item)
+                sa_item.insertChild(0, info_item)
+                self._info_items[sa] = info_item
+            elif info_item.text(0) != info_line:
+                info_item.setText(0, info_line)
+        elif info_item is not None:
+            sa_item.removeChild(info_item)
+            del self._info_items[sa]
 
-            if has_ac:
-                self._build_identified_children(sa_item, sa, dev, collisions)
-            else:
-                self._build_seen_only_children(sa_item, sa, dev, collisions)
+        # ---- sections ----
+        present: set[str] = set()
+        if has_ac:
+            tx_pgns      = sorted(dev.tx_pgns)
+            rx_pgns      = sorted(dev.rx_pgns)
+            unadvertised = sorted(dev.seen_pgns - dev.tx_pgns - dev.rx_pgns - _MGMT_PGNS)
 
-            sa_item.setExpanded(True)
-
-    def _build_identified_children(
-        self, sa_item: QTreeWidgetItem, sa: int,
-        dev: DeviceInfo, collisions: set[int],
-    ) -> None:
-        tx_pgns = sorted(dev.tx_pgns)
-        rx_pgns = sorted(dev.rx_pgns)
-
-        if tx_pgns:
-            tx_hdr = self._section_item(f"TX PGNs ({len(tx_pgns)})")
-            sa_item.addChild(tx_hdr)
-            for pgn in tx_pgns:
-                prefix = "⚠ " if pgn in collisions else "    "
-                child  = QTreeWidgetItem(
-                    [prefix + _pgn_label(pgn), self._obs_status(pgn, sa)]
+            if tx_pgns:
+                hdr = self._ensure_section(sa_item, sa, "tx", f"TX PGNs ({len(tx_pgns)})")
+                self._reconcile_pgns(hdr, sa, "tx", tx_pgns, dev, collisions)
+                present.add("tx")
+            if rx_pgns:
+                hdr = self._ensure_section(sa_item, sa, "rx", f"RX PGNs ({len(rx_pgns)})")
+                self._reconcile_pgns(hdr, sa, "rx", rx_pgns, dev, collisions)
+                present.add("rx")
+            if unadvertised:
+                ua_label = "Observed / not advertised" + (
+                    "  (no PGN list received)" if not tx_pgns and not rx_pgns else ""
                 )
-                if pgn not in dev.seen_pgns:
-                    child.setForeground(1, QBrush(_STALE_FG))
-                if pgn in collisions:
-                    child.setToolTip(0, self._collision_tooltip(pgn))
-                tx_hdr.addChild(child)
-            tx_hdr.setExpanded(True)
+                hdr = self._ensure_section(sa_item, sa, "ua", ua_label)
+                self._reconcile_pgns(hdr, sa, "ua", unadvertised, dev, collisions)
+                present.add("ua")
+        else:
+            visible = sorted(dev.seen_pgns - _MGMT_PGNS)
+            if visible:
+                hdr = self._ensure_section(sa_item, sa, "obs", f"Observed PGNs ({len(visible)})")
+                self._reconcile_pgns(hdr, sa, "obs", visible, dev, collisions)
+                present.add("obs")
 
-        if rx_pgns:
-            rx_hdr = self._section_item(f"RX PGNs ({len(rx_pgns)})")
-            sa_item.addChild(rx_hdr)
-            for pgn in rx_pgns:
-                child = QTreeWidgetItem(["    " + _pgn_label(pgn), ""])
-                rx_hdr.addChild(child)
-            rx_hdr.setExpanded(True)
+        self._remove_absent_sections(sa, present)
 
-        unadvertised = dev.seen_pgns - dev.tx_pgns - dev.rx_pgns - _MGMT_PGNS
-        if unadvertised:
-            ua_label = "Observed / not advertised" + (
-                "  (no PGN list received)" if not tx_pgns and not rx_pgns else ""
-            )
-            ua_hdr = self._section_item(ua_label)
-            sa_item.addChild(ua_hdr)
-            for pgn in sorted(unadvertised):
-                prefix = "⚠ " if pgn in collisions else "    "
-                child = QTreeWidgetItem(
-                    [prefix + _pgn_label(pgn), self._obs_status(pgn, sa)]
-                )
-                if pgn in collisions:
-                    child.setToolTip(0, self._collision_tooltip(pgn))
-                ua_hdr.addChild(child)
-            ua_hdr.setExpanded(True)
-
-    def _build_seen_only_children(
-        self, sa_item: QTreeWidgetItem, sa: int,
-        dev: DeviceInfo, collisions: set[int],
+    def _reconcile_pgns(
+        self, hdr: QTreeWidgetItem, sa: int, section_id: str,
+        pgns: list[int], dev: DeviceInfo, collisions: set[int],
     ) -> None:
-        visible = dev.seen_pgns - _MGMT_PGNS
-        if not visible:
-            return
-        hdr = self._section_item(f"Observed PGNs ({len(visible)})")
-        sa_item.addChild(hdr)
-        for pgn in sorted(visible):
-            prefix = "⚠ " if pgn in collisions else "    "
-            child = QTreeWidgetItem([prefix + _pgn_label(pgn), self._obs_status(pgn, sa)])
-            if pgn in collisions:
-                child.setToolTip(0, self._collision_tooltip(pgn))
-            hdr.addChild(child)
-        hdr.setExpanded(True)
+        wanted = set(pgns)
+
+        # Drop leaves whose PGN migrated out of this section.
+        for i in range(hdr.childCount() - 1, -1, -1):
+            cpgn = hdr.child(i).data(0, _ROLE_PGN)
+            if cpgn not in wanted:
+                hdr.takeChild(i)
+                self._pgn_items.pop((sa, section_id, cpgn), None)
+
+        for pgn in pgns:
+            self._ensure_pgn_leaf(hdr, sa, section_id, pgn, dev, collisions)
+
+    def _ensure_pgn_leaf(
+        self, hdr: QTreeWidgetItem, sa: int, section_id: str,
+        pgn: int, dev: DeviceInfo, collisions: set[int],
+    ) -> None:
+        is_coll = pgn in collisions
+        col0    = ("⚠ " if is_coll else "    ") + _pgn_label(pgn)
+        col1    = "" if section_id == "rx" else self._obs_status(pgn, sa)
+
+        leaf = self._pgn_items.get((sa, section_id, pgn))
+        if leaf is None:
+            leaf = QTreeWidgetItem([col0, col1])
+            leaf.setData(0, _ROLE_PGN, pgn)
+            hdr.insertChild(self._leaf_insert_index(hdr, pgn), leaf)
+            self._pgn_items[(sa, section_id, pgn)] = leaf
+        else:
+            if leaf.text(0) != col0:
+                leaf.setText(0, col0)
+            if leaf.text(1) != col1:
+                leaf.setText(1, col1)
+
+        # TX PGNs that were never actually observed are dimmed in column 1.
+        if section_id == "tx" and pgn not in dev.seen_pgns:
+            self._apply_fg(leaf, 1, _STALE_FG, 1)
+        else:
+            self._apply_fg(leaf, 1, None, 0)
+
+        tip = self._collision_tooltip(pgn) if is_coll else ""
+        if leaf.toolTip(0) != tip:
+            leaf.setToolTip(0, tip)
+
+    def _ensure_section(
+        self, sa_item: QTreeWidgetItem, sa: int, section_id: str, label: str,
+    ) -> QTreeWidgetItem:
+        hdr = self._section_items.get((sa, section_id))
+        if hdr is None:
+            hdr = self._section_item(label)
+            hdr.setData(0, _ROLE_SECTION, section_id)
+            sa_item.insertChild(self._section_insert_index(sa_item, sa, section_id), hdr)
+            hdr.setExpanded(True)
+            self._section_items[(sa, section_id)] = hdr
+        elif hdr.text(0) != label:
+            hdr.setText(0, label)
+        return hdr
+
+    def _remove_absent_sections(self, sa: int, present: set[str]) -> None:
+        for section_id in [s for (a, s) in self._section_items if a == sa and s not in present]:
+            hdr     = self._section_items.pop((sa, section_id))
+            sa_item = self._sa_items.get(sa)
+            if sa_item is not None:
+                sa_item.removeChild(hdr)
+            for i in range(hdr.childCount()):
+                self._pgn_items.pop((sa, section_id, hdr.child(i).data(0, _ROLE_PGN)), None)
+
+    # ------------------------------------------------------------------
+    # Insertion-order helpers
+    # ------------------------------------------------------------------
+
+    def _sa_insert_index(self, sa: int) -> int:
+        for i in range(self._tree.topLevelItemCount()):
+            other = self._tree.topLevelItem(i).data(0, _ROLE_SA)
+            if other is not None and other > sa:
+                return i
+        return self._tree.topLevelItemCount()
+
+    def _section_insert_index(
+        self, sa_item: QTreeWidgetItem, sa: int, section_id: str,
+    ) -> int:
+        rank = _SECTION_ORDER[section_id]
+        idx  = 1 if sa in self._info_items else 0
+        for i in range(idx, sa_item.childCount()):
+            cid = sa_item.child(i).data(0, _ROLE_SECTION)
+            if cid is not None and _SECTION_ORDER[cid] < rank:
+                idx = i + 1
+        return idx
+
+    def _leaf_insert_index(self, hdr: QTreeWidgetItem, pgn: int) -> int:
+        for i in range(hdr.childCount()):
+            if hdr.child(i).data(0, _ROLE_PGN) > pgn:
+                return i
+        return hdr.childCount()
+
+    def _apply_fg(self, item: QTreeWidgetItem, col: int, color: QColor | None, state: int) -> None:
+        # color=None means "reset to the theme default" — a default-constructed
+        # QBrush has NoBrush style, which the view treats as no override. Passing
+        # QBrush(QColor()) instead would paint the text solid black.
+        role = _ROLE_FG0 if col == 0 else _ROLE_FG1
+        if item.data(0, role) != state:
+            item.setForeground(col, QBrush(color) if color is not None else QBrush())
+            item.setData(0, role, state)
+
+    def _apply_sa_visual(self, sa_item: QTreeWidgetItem, dev: DeviceInfo, now: float) -> None:
+        last_ts = dev.last_seen_ts
+        stale   = last_ts > 0 and (now - last_ts) > _STALE_S
+        has_ac  = dev.has_address_claim
+        status  = f"silent {int(now - last_ts)}s" if stale else ""
+        if sa_item.text(1) != status:
+            sa_item.setText(1, status)
+        if stale:
+            self._apply_fg(sa_item, 0, _STALE_FG, 2)
+            self._apply_fg(sa_item, 1, _STALE_FG, 2)
+        elif not has_ac:
+            self._apply_fg(sa_item, 0, _SEEN_FG, 1)
+            self._apply_fg(sa_item, 1, _SEEN_FG, 1)
+        else:
+            self._apply_fg(sa_item, 0, None, 0)
+            self._apply_fg(sa_item, 1, None, 0)
 
     def _obs_status(self, pgn: int, sa: int) -> str:
         entry = self._store.n2k_by_pgn_sa.get((pgn, sa))
@@ -258,27 +371,10 @@ class NetworkTab(QWidget):
 
     def _update_stale(self) -> None:
         now = time.time()
-        for i in range(self._tree.topLevelItemCount()):
-            sa_item = self._tree.topLevelItem(i)
-            sa      = sa_item.data(0, _ROLE_SA)
-            if sa is None:
-                continue
-            dev     = self._store.devices.get(sa)
-            if dev is None:
-                continue
-            last_ts = dev.last_seen_ts
-            stale   = last_ts > 0 and (now - last_ts) > _STALE_S
-            has_ac  = dev.has_address_claim
-            if stale:
-                elapsed = int(now - last_ts)
-                sa_item.setText(1, f"silent {elapsed}s")
-                sa_item.setForeground(0, QBrush(_STALE_FG))
-                sa_item.setForeground(1, QBrush(_STALE_FG))
-            else:
-                sa_item.setText(1, "")
-                fg = _SEEN_FG if not has_ac else QColor()
-                sa_item.setForeground(0, QBrush(fg))
-                sa_item.setForeground(1, QBrush(QColor()))
+        for sa, sa_item in self._sa_items.items():
+            dev = self._store.devices.get(sa)
+            if dev is not None:
+                self._apply_sa_visual(sa_item, dev, now)
 
     # ------------------------------------------------------------------
     # Address negotiation log
