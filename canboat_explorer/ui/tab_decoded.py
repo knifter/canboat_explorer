@@ -77,6 +77,9 @@ class DecodedTab(QWidget):
         self._tree.setHeaderLabels(["Signal", "Rate"])
         self._tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self._tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        # Otherwise the last section (Rate) is force-stretched to fill the panel;
+        # we want Rate to fit its content and Signal to absorb the spare width.
+        self._tree.header().setStretchLastSection(False)
         self._tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self._tree.itemSelectionChanged.connect(self._on_selection_changed)
         self._tree.itemExpanded.connect(self._on_item_expanded)
