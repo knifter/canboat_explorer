@@ -33,6 +33,10 @@ A desktop application for exploring, debugging, and recording CAN / NMEA 2000 bu
 - **nmea2000's internal fast-packet reassembler not used for Tab 2/3** — it only surfaces the decoded result, never the raw assembled payload or frame count. It is tightly coupled to its own decoder and cannot be driven or queried independently. Tabs 2/3 need `payload:bytes`, `frame_count`, and per-frame timing, none of which nmea2000 exposes.
 - **`build_network_map=False` on the decoder** — `NMEA2000Decoder` is initialised without `build_network_map=True`. That flag would cause `decode()` to return `None` for any source that has not yet sent an ISO Address Claim (PGN 60928), silently dropping messages for up to 10 minutes from decoder startup — which breaks `bulk_load`. Tab 3 will harvest device identity directly from `decoded_by_key` entries for PGNs 60928, 126464, and 126996 instead.
 - **Qualifier key computed locally** — `NMEA2000Message.hash` is only set when `build_network_map=True`, so it is always `None` in our decoder. The qualifier key for `decoded_by_key` is computed as `tuple(sorted((f.id, f.raw_value) for f in decoded.fields if f.part_of_primary_key))` — deterministic, hashable, and requires no library flag.
+- **Message TX path** — sending reuses `bus.send(can.Message)` (present on `WaveshareCANBus`, `bus/waveshare_bus.py`; standard on every python-can bus). NMEA 2000 messages are built by `nmea2000.NMEA2000Encoder(output_format=N2KFormat.PYTHON_CAN).encode(msg)`, which returns `list[can.Message]` and performs arbitration-ID construction **and fast-packet splitting internally** (symmetric to the decoder). No hand-rolled bit-packing or FP splitter is needed for form-based sends. Form mode builds `NMEA2000Message.fields` from the bundled canboat field definitions (`pgn_catalogue.PGN_LOOKUP`); the encoder dispatches by `msg.PGN` (534 per-PGN encoders bundled). A raw/hex compose mode builds frames directly; for that path only, `core/n2k_frame_info.py` gains the inverse `build_arb_id(pgn, priority, sa, dst)`. Send is thread-safe against the RX `recv()` loop — `WaveshareCANBus` send/recv share a `_lock`, and python-can buses are send/recv safe.
+- **TX source address** — the source address is set **per message in the compose form** (defaults to a free/null SA, editable per row); there is no global address-claim — the app is an impolite node. A collision with a real device's SA is possible, so the Sender warns when the chosen SA already appears in `store.by_pgn_sa`. Full address-claim participation is an Idea.
+- **TX safety arm** — a global **Arm TX** switch (off by default, prominent in the Sender tab) gates all transmission; nothing is sent unless armed. Arming requires a live, connected adapter; it is force-disabled in read-only/open-file mode and when no adapter is connected. Pause (RX-side) does not affect TX.
+- **Sent-frame visibility** *(confirmed)* — sent frames are tagged TX and fed back through the normal ingest path so they appear in the RX tabs and the session log, distinguished by direction. `RawFrame` gains an `is_tx` slot and the session-log flags byte gains an `is_tx` bit (bit 3, currently spare). Tabs 1/2 show a Dir indicator.
 - **Capture modes**:
   - *Live*: connected to adapter, appending to the active session log. A **Pause / Continue** button suspends frame capture without disconnecting.
   - *Read-only / Open*: a saved file is opened for offline browsing; live capture redirects to that file (subsequent frames append there).
@@ -106,6 +110,27 @@ Bus Layer
 | Persistence / session log | `SessionLog` (.canlog) | nothing |
 | UI data model | `DataStore` | nothing |
 | Field decoding (heading, SOG…) | **nothing** | **full PGN library** |
+| Field **encoding** (build a message) | **nothing** | `NMEA2000Encoder` → `list[can.Message]` |
+
+### TX path (Tab 5)
+
+```
+Tab 5 Sender                                Arm-TX gate (off by default)
+  ├── Form mode  → NMEA2000Message ──┐          │ requires live adapter
+  │   (PGN + field values)           │          ▼
+  ├── Raw mode   → can.Message(s) ───┤   NMEA2000Encoder(PYTHON_CAN).encode()
+  │   (PGN/prio/dst/SA + hex)        │     → list[can.Message]  (FP split internal)
+  └── ISO Request (from Tab 3)  ─────┘          │
+        PGN 59904, dst=SA                       ▼
+                                          bus.send(can.Message)   [_lock-guarded]
+                                                │
+                                                └── (proposed) tag is_tx → store.ingest()
+                                                       → RX tabs + session log, Dir marker
+```
+
+`TxScheduler` (QTimer) walks the enabled entries and sends those whose periodic
+interval is due; once-entries send on their button. All sends pass the Arm-TX
+gate. Source address is set per message in the compose form.
 
 ---
 
@@ -179,6 +204,13 @@ Bus Layer
   - A "showing X of Y" count is displayed in the bar.
 
   *State:* held in a single shared `FilterSpec` (see Decisions); the bar emits a debounced `changed` signal each tab subscribes to. Filter is transient view state — **not** persisted across sessions (unlike flags/highlights).
+- **Tab 5 – Sender** — compose and transmit CAN / NMEA 2000 messages. Requires a live connected adapter and the global **Arm TX** switch (off by default); disabled in read-only/open-file mode.
+  - *TX entry list* — a table of configured messages, one row each: Enabled · Name · PGN · Dest · Prio · Mode (Once / Periodic) · Rate (ms) · Sent (count) · Last sent · payload preview. Per-row **Send now** button and **enable** checkbox; global Send-all / Stop-all.
+  - *Compose — value form + live hex, always both:* every entry shows a value form **and** the live hex payload together. For a known PGN the form renders one input per field from the bundled canboat definitions (`pgn_catalogue.PGN_LOOKUP`) — numeric inputs with units, enumerations as dropdowns, `RESERVED`/`SPARE` hidden. **The hex payload is always visible and editable too — not a fallback:** editing a form field re-encodes (`NMEA2000Encoder(PYTHON_CAN)`, single- or fast-packet, arb ID built by the library) and updates the hex; editing the hex re-decodes and updates the form (best-effort — if the bytes no longer decode the form greys out but the hex still sends). A byte↔field cross-highlight (see *Message inspector* want-to-have) links the two. For PGNs absent from the catalogue only the hex editor is shown, and the arb ID is built locally via `build_arb_id()`; raw payloads >8 bytes are split to fast-packet by us. *Proprietary multi-variant PGNs* (e.g. 126720, 65280-range) resolve to one catalogue variant via first-occurrence-wins — variant selection there is a later refinement, and Copy-from-Tab-2 avoids the issue because the decoded message already carries its resolved variant fields.
+  - *Scheduling* — **Once** fires on the button; **Periodic** re-sends at the entry's rate while enabled and armed. `TxScheduler` (QTimer) sends due entries; per-entry count and last-sent update live.
+  - *Copy from RX* — right-click a message in **Tab 2** → **Copy to Sender**: creates a new entry pre-filled from that message (decoded fields in Form mode when the PGN is decodable, otherwise raw bytes), left **disabled** so the user edits before sending. Tab 1 frames are not a copy source — the assembled N2K message in Tab 2 is the prototype.
+  - *Network quick-requests* — right-click a device (SA node) in Tab 3 → **Request product info (126996)** / **Request PGN list (126464)** / **Request address claim (60928)**: builds an ISO Request (PGN 59904) as a Form-mode entry with the single *Requested PGN* field set and destination = that SA (no raw bytes), sends it immediately once (if armed), and records it as an entry in the Sender tab.
+  - *Source address* — set per message in the compose form; a warning is shown if the chosen SA is already observed on the bus.
 
 ---
 
@@ -186,8 +218,11 @@ Bus Layer
 
 - **Flag tooltip detail** — hover over any auto-flagged row to see the full reason string (moved to requirements as part of the revised flag system)
 - **CSV export** — user-triggered export of current session or a saved file to CSV, or better yet: use nmea2000 write file format, whatever that supports so other applications can also read this data.
-- **Data Sources** — Support other data sources/usb-adapters. TCP/IP? SignalK? 
-- **Message Sender** — A tab to send messages, clone from received or create new ones and periodically send these. 
+- **Data Sources** — Support other data sources/usb-adapters: TCP/IP, SignalK server, SocketCAN, in addition to serial/USB gateways.
+- **TX presets** — save / load named sets of Sender entries (sidecar or `.json`), so common test scenarios reload across sessions.
+- **Broadcast / generic request** — ISO Request to destination 255 (global), and a "Request any PGN" dialog not tied to a network node.
+- **Message inspector (byte mapping)** — a detail panel showing a message's payload as hex with a field-mapping table (Field · Bit range · Byte range · Bytes · Raw · Parsed). Clicking a byte highlights its field and vice-versa, using the field bit-offsets from the canboat definition. Shared component: the form↔hex bridge in the Sender (Tab 5) and an inspector in Tab 2 (assembled payload) and Tab 4 (decoded values).
+- **PGN Browser** — a searchable view of the bundled canboat catalogue (search by PGN number / name / description / field), showing Type (Single/Fast/ISO), completion status, field count, the full field layout, and the enum lookup tables for enumerated fields; filterable by status/frame-type, with links to NMEA documentation. Doubles as the PGN picker for the Sender.
 
 ---
 
@@ -201,6 +236,15 @@ Written down to lightly influence architecture; not committed.
 - **Timeline / rate graph** — sparkline per PGN showing message rate over time
 - **Network topology visual** — graphical bus diagram (nodes on a backbone line); revisit once typical network shape is known from real captures
 - **Tab-local refinement filters** — extend the global filter with predicates only one tab can express: raw-byte / byte-pattern match in Tab 1, decoded field-value predicates in Tab 4. Layered *under* the global filter (ANDed), not a replacement for it. Also the deferred global dimensions: arbitration-ID and priority. A smart-query grammar (`pgn:… sa:… prio:<3`) could be revisited here if the discrete-field bar proves too limiting.
+- **TX sequences / macros** — an ordered list of Sender messages with inter-message delays, optionally looping; for scripted test scenarios.
+- **Full ISO address-claim** — the app participates as a well-behaved node (NAME, PGN 60928 claim, contention handling) instead of transmitting from a fixed SA.
+- **Bus-load estimate** — show the added bus load from active periodic TX entries.
+- **Trigger-on-receive** — send a configured message automatically when a matching message is observed (reactive automation; pairs with the global filter predicate).
+- **Fuzz / sweep** — randomize or sweep a field's value across a range for stress / discovery testing.
+- **Custom PGN definition editor** — author or override PGN definitions, lookups, and bit-lookups for unknown/proprietary PGNs so they decode in all tabs; export/share definitions. Pairs with *Proprietary message annotations* and the *Pattern / structure guesser* for reverse engineering.
+- **Multi-format transform & recording** — convert and record traffic between the NMEA 2000 formats the `nmea2000` library already supports (Actisense, Canboat JSON, candump, iKonvert/PCDIN, …); generalises the CSV-export want-to-have.
+- **Per-message detail views** — Definition, and raw-Input representations of a selected message, alongside the byte-mapping inspector.
+- **Custom-expression filter** — an advanced filter accepting a free expression over message fields (e.g. a predicate over decoded values); a tab-local refinement layered under the global filter.
 
 ---
 
@@ -223,12 +267,16 @@ Written down to lightly influence architecture; not committed.
 15. ✅ **Per-row flag refactor** — replaced PGN-level auto-flag state (`_unknown_pgns`, `_known_pgns`, `_unknown_arbs`, `_incomplete_fp_pgns`, `_complete_fp_pgns`, `_multi_sa_pgns`, `_collision_pgns`) with per-frame and per-message signals. Subclassed `can.Message` as `RawFrame` with a `n2k_msg` back-link slot; extended `N2KMessage` with `decoded: bool`, `is_complete: bool`, and `frames: list[RawFrame]`; `FastPacketReassembler._Buffer` tracks contributing frames and emits them on the message; nmea2000 decoder result aligned with FP emit by call timing. Row flagging in Tabs 1/2 reads frame/message state directly; collision detection lives in Tab 3 as sole owner (covering both actual multi-SA and TX-advertised potential collisions). Tab headers gained `⚠` markers backed by three store counters. See `design/store-data-audit.md` for the final state.
 16. ✅ **SA-keyed PGN name cache** — `DataStore.pgn_sa_names` populated reactively from `decoded.description`; `store.pgn_sa_name(pgn, sa)` falls back to `pgn_catalogue.pgn_name(pgn)`. (Cross-SA variant-collision detection moved to Tab 3 as part of item 15.)
 17. **Global filter bar** — `core/filter.py` (`FilterSpec` + `matches()`, pure/Qt-free, unit-tested); `FilterBar` widget above the tab widget with discrete PGN / SA / free-text inputs + Warnings/Errors/Highlighted/Hide-ignored toggles; filtered source-index arrays in the Tab 1/2 table models (incremental append on live frames, debounced rebuild on edit); node pruning in the Tab 3/4 trees; "showing X of Y" count; `Ctrl+F` focuses the free-text field; dedicated Clear button resets all inputs + toggles. Transient (not persisted).
-18. **CSV / nmea2000-format export** *(want-to-have)*
-19. **Replay, annotations, pattern guesser** *(ideas — revisit post-core)*
+18. **Tab 5 – Sender** — `core/tx.py` (`TxEntry`, `TxScheduler`); `bus.send` wiring + `NMEA2000Encoder(PYTHON_CAN)` for Form mode (form built from `PGN_LOOKUP` field defs, real values only); raw/hex fallback via inverse `build_arb_id()`; Arm-TX gate (off by default, requires live adapter); TX entry list with once/periodic scheduling; Copy-to-Sender from Tab 2 only; ISO-request quick actions from Tab 3 (59904 → 126996/126464/60928); per-message source address in the compose form; TX-tagged self-inject (`is_tx` slot + log bit) + Dir indicator.
+19. **CSV / nmea2000-format export** *(want-to-have)*
+20. **Message inspector (byte mapping) + PGN Browser** *(want-to-haves — the inspector is the Sender's form↔hex bridge and also enriches Tabs 2/4)*
+21. **TX presets; custom PGN-definition editor; multi-format transform/recording; per-message detail views; custom-expression filter; replay, annotations, pattern guesser** *(ideas — revisit post-core)*
 
 ---
 
 ## Open Questions
 
 - **"Clear" semantics confirmed**: active log is truncated to zero bytes (not archived); in-memory state is reset; user confirmation dialog required. Archiving was considered but dropped — Save As covers that need.
+- **Sent-frame visibility confirmed**: TX frames are injected into the store + session log with an `is_tx` direction bit (option a) so they appear in the RX tabs and persist, shown with a Dir marker. Sender-local-only history was rejected. (Replay is not being built — it remains an Idea.)
+- **TX source-address confirmed**: the source address is set per message in the compose form (simple, impolite node) with a collision warning when the SA is already on the bus. Full ISO address-claim deferred to Ideas.
 
