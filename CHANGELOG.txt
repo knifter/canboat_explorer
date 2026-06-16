@@ -18,6 +18,15 @@ v1.1
 v1.1.1
  - fix can.interfaces.* module packaging
 
+v1.1.2
+ - Network view is updated instead of redrawn so selection, scrolling doesnt reset
+ - Application Icon added
+ - Fix rate calculation in tab 4
+ - Rate calculation is now over at most the last 25 messages instead of the complete session average which gives a more accurate, recent figure
+ - Column scaling improvements
+ - Added PGN column in tab 4 (Decoded) as well
+ - Add tooltip to tab title when warning sign is shown
+
 ---- UPCOMING CHANGES: -----
 
 When andromeda is here:
