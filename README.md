@@ -85,11 +85,9 @@ Peak-System PCAN-USB and the many compatible clones. More robust than the Wavesh
 - **USB ID:** `0C72:000C`
 - **Interface in Settings:** `pcan`
 - **Port:** select the PCAN channel from the dropdown (typically `PCAN_USBBUS1`)
-- **Required library (Windows):** PCAN-Basic API DLL from Peak-System
-  1. Download and unpack [PCAN-Basic](https://www.peak-system.com/products/software/development-packages/pcan-basic/)
-  2. Copy `PCANBasic.dll` to `C:\Windows\System32`
-     - Use `x86/PCANBasic.dll` for 32-bit Python
-     - Use `x64/PCANBasic.dll` for 64-bit Python (most common)
+- **Required driver (Windows):**
+  1. Install the [PCAN-Driver for Windows](https://www.peak-system.com/Drivers.523.0.html). Use the default installation settings (Drivers & Basic API are needed) and reboot if prompted
+  2. Plug in the device and confirm it appears in Device Manager (under "CAN-Hardware" / "PCAN-USB") with no warning icon
 
 
 ## Credits
