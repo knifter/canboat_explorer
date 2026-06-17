@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from dataclasses import dataclass
 
 from serial.tools import list_ports
 
@@ -11,12 +12,28 @@ from PyQt6.QtWidgets import (
 
 from canboat_explorer.core.settings import settings
 
-_INTERFACES = ["waveshare", "slcan", "gs_usb", "pcan"]
-if sys.platform != "win32":
-    _INTERFACES.append("socketcan")
+@dataclass(frozen=True)
+class _Iface:
+    # How the port dropdown is filled:
+    #   "comports" -> scan serial COM ports   "gs_usb" -> scan USB devices
+    #   tuple      -> fixed list of channel names
+    discover: str | tuple[str, ...]
+    serial: bool = False        # uses a serial line -> COM Baud applies
+    posix_only: bool = False    # not available on Windows
 
-_PCAN_CHANNELS    = [f"PCAN_USBBUS{i}" for i in range(1, 17)]
-_SOCKETCAN_NAMES  = [f"can{i}" for i in range(8)]
+    @property
+    def static_ports(self) -> bool:
+        """Port list is fixed, so Refresh does nothing useful."""
+        return not isinstance(self.discover, str)
+
+
+INTERFACES: dict[str, _Iface] = {
+    "waveshare": _Iface(discover="comports", serial=True),
+    "slcan":     _Iface(discover="comports", serial=True),
+    "gs_usb":    _Iface(discover="gs_usb"),
+    "pcan":      _Iface(discover=tuple(f"PCAN_USBBUS{i}" for i in range(1, 17))),
+    "socketcan": _Iface(discover=tuple(f"can{i}" for i in range(8)), posix_only=True),
+}
 
 _SERIAL_BAUDS = [9600, 19200, 38800, 115200, 1228800, 2000000]
 
@@ -34,7 +51,10 @@ class SettingsDialog(QDialog):
 
         # Interface
         self._iface_combo = QComboBox()
-        self._iface_combo.addItems(_INTERFACES)
+        self._iface_combo.addItems(
+            name for name, spec in INTERFACES.items()
+            if not (spec.posix_only and sys.platform == "win32")
+        )
         idx = self._iface_combo.findText(settings.last_interface)
         if idx >= 0:
             self._iface_combo.setCurrentIndex(idx)
@@ -45,6 +65,7 @@ class SettingsDialog(QDialog):
         self._refresh_btn = QPushButton("Refresh")
         self._refresh_btn.clicked.connect(self._refresh_ports)
         self._iface_combo.currentTextChanged.connect(self._refresh_ports)
+        self._iface_combo.currentTextChanged.connect(self._update_field_states)
         self._refresh_ports()
 
         # COM baud
@@ -81,21 +102,37 @@ class SettingsDialog(QDialog):
         form.addRow("COM Baud:", self._serial_baud_combo)
         form.addRow("CAN Bitrate:", self._can_baud_combo)
 
+        # Label widget for COM Baud, so it can be greyed out with its combo
+        self._serial_baud_label = form.labelForField(self._serial_baud_combo)
+
         layout = QVBoxLayout(self)
         layout.addLayout(form)
         layout.addWidget(buttons)
 
+        # Grey out fields that don't apply to the selected interface
+        self._update_field_states()
+
     # ------------------------------------------------------------------
+
+    def _update_field_states(self) -> None:
+        """Enable/disable fields that don't apply to the selected interface."""
+        spec = INTERFACES[self._iface_combo.currentText()]
+
+        self._serial_baud_combo.setEnabled(spec.serial)
+        if self._serial_baud_label is not None:
+            self._serial_baud_label.setEnabled(spec.serial)
+
+        self._refresh_btn.setEnabled(not spec.static_ports)
 
     def _refresh_ports(self) -> None:
         current = self._port_combo.currentData()
         self._port_combo.clear()
 
-        iface = self._iface_combo.currentText()
-        if iface == "pcan":
-            for ch in _PCAN_CHANNELS:
+        spec = INTERFACES[self._iface_combo.currentText()]
+        if spec.static_ports:
+            for ch in spec.discover:
                 self._port_combo.addItem(ch, ch)
-        elif iface == "gs_usb":
+        elif spec.discover == "gs_usb":
             try:
                 from gs_usb.gs_usb import GsUsb
                 devs = GsUsb.scan()
@@ -103,9 +140,6 @@ class SettingsDialog(QDialog):
                 devs = []
             for i, _dev in enumerate(devs):
                 self._port_combo.addItem(f"Device {i}", str(i))
-        elif iface == "socketcan":
-            for name in _SOCKETCAN_NAMES:
-                self._port_combo.addItem(name, name)
         else:
             ports = sorted(list_ports.comports(), key=lambda p: p.device)
             for p in ports:
