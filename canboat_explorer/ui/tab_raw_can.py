@@ -296,6 +296,7 @@ class RawCanTab(QWidget):
 
         self._min_col_widths: dict[int, int] = {}
         self._held: int | None = None   # frames-in-queue held back while paused; None = not paused
+        self._displayed_count = 0       # time-view row count at last refresh (scroll anchor)
 
         self._view = QTableView()
         self._view.setModel(self._time_model)
@@ -394,10 +395,45 @@ class RawCanTab(QWidget):
 
     def on_frames_added(self) -> None:
         model = self._view.model()
-        model.refresh()  # type: ignore[attr-defined]
-        self._update_count()
         if model is self._time_model:
-            self._view.scrollToTop()
+            at_top   = self._view.verticalScrollBar().value() == 0
+            top_row  = self._view.rowAt(0)
+            prev     = self._displayed_count
+            sel_rows = [ix.row() for ix in self._view.selectionModel().selectedRows()]
+            cur_row  = self._view.currentIndex().row()
+            model.refresh()
+            self._displayed_count = model.rowCount()
+            added = self._displayed_count - prev
+            if added > 0:
+                # New rows are prepended at the top; shift the selection and the
+                # scroll anchor down by that many rows so both keep tracking the
+                # same frame as it moves down.
+                self._reanchor_selection(model, sel_rows, cur_row, added)
+            if at_top or top_row < 0:
+                self._view.scrollToTop()
+            elif added > 0:
+                self._view.scrollTo(
+                    model.index(top_row + added, 0),
+                    QTableView.ScrollHint.PositionAtTop,
+                )
+        else:
+            model.refresh()  # type: ignore[attr-defined]
+        self._update_count()
+
+    def _reanchor_selection(self, model, sel_rows, cur_row, added) -> None:
+        if not sel_rows and cur_row < 0:
+            return
+        sm       = self._view.selectionModel()
+        last_col = model.columnCount() - 1
+        if sel_rows:
+            new_sel = QItemSelection()
+            for r in sel_rows:
+                new_sel.select(model.index(r + added, 0),
+                               model.index(r + added, last_col))
+            sm.select(new_sel, QItemSelectionModel.SelectionFlag.ClearAndSelect)
+        if cur_row >= 0:
+            sm.setCurrentIndex(model.index(cur_row + added, 0),
+                               QItemSelectionModel.SelectionFlag.NoUpdate)
 
     def has_warnings(self) -> bool:
         return self._store.oob_frame_count > 0

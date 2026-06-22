@@ -228,6 +228,7 @@ class N2KTab(QWidget):
         self._time_model  = N2KTimeViewModel(store)
         self._accum_model = N2KAccumViewModel(store)
         self._held: int | None = None   # frames-in-queue held back while paused
+        self._displayed_count = 0       # time-view row count at last refresh (scroll anchor)
 
         self._view = QTableView()
         self._view.setModel(self._time_model)
@@ -310,11 +311,44 @@ class N2KTab(QWidget):
     def on_messages_added(self) -> None:
         model = self._view.model()
         if model is self._time_model:
+            at_top   = self._view.verticalScrollBar().value() == 0
+            top_row  = self._view.rowAt(0)
+            prev     = self._displayed_count
+            sel_rows = [ix.row() for ix in self._view.selectionModel().selectedRows()]
+            cur_row  = self._view.currentIndex().row()
             self._time_model.refresh()
-            self._view.scrollToTop()
+            self._displayed_count = self._time_model.rowCount()
+            added = self._displayed_count - prev
+            if added > 0:
+                # New rows are prepended at the top; shift the selection and the
+                # scroll anchor down by that many rows so both keep tracking the
+                # same message as it moves down.
+                self._reanchor_selection(self._time_model, sel_rows, cur_row, added)
+            if at_top or top_row < 0:
+                self._view.scrollToTop()
+            elif added > 0:
+                self._view.scrollTo(
+                    self._time_model.index(top_row + added, 0),
+                    QTableView.ScrollHint.PositionAtTop,
+                )
         else:
             self._accum_model.refresh()
         self._update_count()
+
+    def _reanchor_selection(self, model, sel_rows, cur_row, added) -> None:
+        if not sel_rows and cur_row < 0:
+            return
+        sm       = self._view.selectionModel()
+        last_col = model.columnCount() - 1
+        if sel_rows:
+            new_sel = QItemSelection()
+            for r in sel_rows:
+                new_sel.select(model.index(r + added, 0),
+                               model.index(r + added, last_col))
+            sm.select(new_sel, QItemSelectionModel.SelectionFlag.ClearAndSelect)
+        if cur_row >= 0:
+            sm.setCurrentIndex(model.index(cur_row + added, 0),
+                               QItemSelectionModel.SelectionFlag.NoUpdate)
 
     def reset(self) -> None:
         self._time_model.refresh()
