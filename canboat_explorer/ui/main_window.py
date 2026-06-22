@@ -4,10 +4,10 @@ import queue
 from pathlib import Path
 
 from PyQt6.QtCore import QTimer
-from PyQt6.QtGui import QAction
+from PyQt6.QtGui import QAction, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QFileDialog, QLabel, QMainWindow, QMessageBox,
-    QPushButton, QStatusBar, QStyle, QTabWidget, QToolBar, QWidget,
+    QPushButton, QStatusBar, QStyle, QTabWidget, QToolBar, QVBoxLayout, QWidget,
 )
 
 from canboat_explorer.bus.can_reader import CanReader
@@ -16,6 +16,7 @@ from canboat_explorer.core.raw_frame import RawFrame
 from canboat_explorer.core.session_log import SessionLog
 from canboat_explorer.core.settings import settings
 from canboat_explorer.core.store import DataStore
+from canboat_explorer.ui.filter_bar import FilterBar
 from canboat_explorer.ui.settings_dialog import SettingsDialog
 from canboat_explorer.ui.tab_decoded import DecodedTab
 from canboat_explorer.ui.tab_n2k import N2KTab
@@ -161,7 +162,20 @@ class MainWindow(QMainWindow):
         self._tabs.addTab(self._tab_n2k,     self._TAB_NAMES[1])
         self._tabs.addTab(self._tab_network, self._TAB_NAMES[2])
         self._tabs.addTab(self._tab_decoded, self._TAB_NAMES[3])
-        self.setCentralWidget(self._tabs)
+
+        self._filter_bar = FilterBar()
+        self._filter_bar.set_sources(self._pgn_values, self._sa_values)
+
+        central = QWidget()
+        cl = QVBoxLayout(central)
+        cl.setContentsMargins(0, 0, 0, 0)
+        cl.setSpacing(0)
+        cl.addWidget(self._filter_bar)
+        cl.addWidget(self._tabs)
+        self.setCentralWidget(central)
+
+        sc = QShortcut(QKeySequence("Ctrl+F"), self)
+        sc.activated.connect(self._filter_bar.focus_search)
 
     def _update_tab_warnings(self) -> None:
         tabs = (self._tab_raw, self._tab_n2k, self._tab_network, self._tab_decoded)
@@ -174,6 +188,25 @@ class MainWindow(QMainWindow):
             tip = tab.warning_text() if warn else ""
             if bar.tabToolTip(idx) != tip:
                 bar.setTabToolTip(idx, tip)
+
+    # ------------------------------------------------------------------
+    # Filter-bar value pickers (observed PGNs / SAs, read live)
+    # ------------------------------------------------------------------
+
+    def _pgn_values(self) -> list[tuple[int, str]]:
+        from canboat_explorer.core.pgn_catalogue import pgn_name
+        out: list[tuple[int, str]] = []
+        for pgn in sorted(self._store.by_pgn):
+            name = pgn_name(pgn)
+            out.append((pgn, f"{pgn}  {name}" if name else str(pgn)))
+        return out
+
+    def _sa_values(self) -> list[tuple[int, str]]:
+        out: list[tuple[int, str]] = []
+        for sa in sorted(self._store.devices):
+            dev = self._store.devices[sa]
+            out.append((sa, f"{sa}  —  {dev.model}" if dev.model else str(sa)))
+        return out
 
     # ------------------------------------------------------------------
     # Status bar
