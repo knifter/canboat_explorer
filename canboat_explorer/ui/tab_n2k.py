@@ -3,11 +3,14 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from PyQt6.QtCore import QAbstractTableModel, QModelIndex, Qt, QTimer
+from PyQt6.QtCore import (
+    QAbstractTableModel, QItemSelection, QItemSelectionModel, QModelIndex,
+    Qt, QTimer,
+)
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
-    QComboBox, QHBoxLayout, QLabel, QTableView, QVBoxLayout, QWidget,
-    QHeaderView,
+    QApplication, QComboBox, QHBoxLayout, QLabel, QTableView, QVBoxLayout,
+    QWidget, QHeaderView,
 )
 
 from canboat_explorer.core.fast_packet import N2KMessage
@@ -55,6 +58,25 @@ def _fmt_time(ts: float) -> str:
     t = time.localtime(ts)
     ms = int((ts % 1) * 1000)
     return f"{t.tm_hour:02d}:{t.tm_min:02d}:{t.tm_sec:02d}.{ms:03d}"
+
+
+def _apply_selection_band(view: QTableView) -> None:
+    """Force a flat, continuous selection band over the whole row.
+
+    The Qt 6 Windows 11 style draws each selected cell as a separate rounded
+    pill — and it reads selection from the view's selection model, not from the
+    delegate's ``option.state``, so a delegate cannot talk it out of it. The
+    gaps between those pills are the vertical "bars". Overriding the selected
+    item background via stylesheet replaces the pills with one flat fill. The
+    alpha is kept high enough to cover the grid lines underneath (a more
+    translucent fill lets them bleed through as bars again) while still tinting
+    rather than fully hiding the row's own / flag colour.
+    """
+    hl = view.palette().highlight().color()
+    view.setStyleSheet(
+        f"QTableView::item:selected {{ background-color: "
+        f"rgba({hl.red()}, {hl.green()}, {hl.blue()}, 180); }}"
+    )
 
 
 class N2KTimeViewModel(QAbstractTableModel):
@@ -239,6 +261,7 @@ class N2KTab(QWidget):
         self._view.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
         self._view.setEditTriggers(QTableView.EditTrigger.NoEditTriggers)
         self._view.verticalHeader().setVisible(False)
+        _apply_selection_band(self._view)
         self._view.doubleClicked.connect(self._copy_cell)
 
         self._group_combo = QComboBox()
