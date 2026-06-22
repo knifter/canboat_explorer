@@ -309,6 +309,7 @@ class RawCanTab(QWidget):
         self._view.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
         self._view.setEditTriggers(QTableView.EditTrigger.NoEditTriggers)
         self._view.verticalHeader().setVisible(False)
+        self._view.doubleClicked.connect(self._copy_cell)
 
         self._group_combo = QComboBox()
         self._group_combo.addItems(_GROUP_OPTIONS)
@@ -382,6 +383,14 @@ class RawCanTab(QWidget):
         hdr.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(sep, QHeaderView.ResizeMode.Fixed)
         self._view.setColumnWidth(sep, 8)
+
+    def _copy_cell(self, index: QModelIndex) -> None:
+        if not index.isValid():
+            return
+        text = index.data(Qt.ItemDataRole.DisplayRole)
+        if text is None:
+            return
+        QApplication.clipboard().setText(str(text))
 
     def on_frames_added(self) -> None:
         model = self._view.model()

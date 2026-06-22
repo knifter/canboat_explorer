@@ -238,6 +238,7 @@ class N2KTab(QWidget):
         self._view.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
         self._view.setEditTriggers(QTableView.EditTrigger.NoEditTriggers)
         self._view.verticalHeader().setVisible(False)
+        self._view.doubleClicked.connect(self._copy_cell)
 
         self._group_combo = QComboBox()
         self._group_combo.addItems(_GROUP_OPTIONS)
@@ -297,6 +298,14 @@ class N2KTab(QWidget):
             return
         self._held = held
         self._update_count()
+
+    def _copy_cell(self, index: QModelIndex) -> None:
+        if not index.isValid():
+            return
+        text = index.data(Qt.ItemDataRole.DisplayRole)
+        if text is None:
+            return
+        QApplication.clipboard().setText(str(text))
 
     def on_messages_added(self) -> None:
         model = self._view.model()
