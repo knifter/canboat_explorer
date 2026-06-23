@@ -3,8 +3,10 @@ from __future__ import annotations
 import queue
 from pathlib import Path
 
-from PyQt6.QtCore import QTimer
-from PyQt6.QtGui import QAction, QKeySequence, QShortcut
+from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtGui import (
+    QAction, QColor, QIcon, QKeySequence, QPainter, QPixmap, QShortcut,
+)
 from PyQt6.QtWidgets import (
     QFileDialog, QLabel, QMainWindow, QMessageBox,
     QPushButton, QStatusBar, QStyle, QTabWidget, QToolBar, QVBoxLayout, QWidget,
@@ -25,6 +27,26 @@ from canboat_explorer.ui.tab_raw_can import RawCanTab
 
 _DRAIN_INTERVAL_MS = 50
 _CANLOG_FILTER     = "CAN Log (*.canlog);;All files (*)"
+
+# Soft amber on the filter-bar toggle while the filter is actively hiding rows —
+# matches the in-bar On/Off tint, so it stays visible even when the bar is hidden.
+_FILTER_ACTIVE_STYLE = "QToolButton { background-color: #e6b24a; color: black; }"
+
+
+def _glyph_icon(glyph: str, side: int) -> QIcon:
+    """Render a text glyph (e.g. an emoji) into a square icon so it rides the
+    same centered/sized icon pipeline as the style's standard toolbar icons —
+    a text-only tool button positions the glyph by baseline and sits too low."""
+    pm = QPixmap(side, side)
+    pm.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pm)
+    font = painter.font()
+    font.setPixelSize(int(side * 0.8))
+    painter.setFont(font)
+    painter.setPen(QColor("#dddddd"))   # visible fallback if rendered monochrome
+    painter.drawText(pm.rect(), Qt.AlignmentFlag.AlignCenter, glyph)
+    painter.end()
+    return QIcon(pm)
 
 
 class MainWindow(QMainWindow):
@@ -128,6 +150,15 @@ class MainWindow(QMainWindow):
         tb.addAction(self._act_save)
         tb.addSeparator()
         tb.addAction(self._act_settings)
+        tb.addSeparator()
+
+        isz  = tb.iconSize()
+        side = isz.width() if isz.width() > 0 else 24
+        self._act_filter = QAction(_glyph_icon("🔍", side), "Filter bar", self)
+        self._act_filter.setToolTip("Show/hide the filter bar")
+        self._act_filter.triggered.connect(self._toggle_filter_bar)
+        tb.addAction(self._act_filter)
+        self._filter_toggle_btn = tb.widgetForAction(self._act_filter)
 
     def _build_conn_toolbar(self) -> None:
         tb = QToolBar("Connection")
@@ -166,11 +197,9 @@ class MainWindow(QMainWindow):
         self._filter_bar = FilterBar()
         self._filter_bar.set_sources(self._filter_pgn_values, self._filter_sa_values)
         self._filter_bar.changed.connect(self._apply_filter)
-        self._tab_raw.counts_changed.connect(self._refresh_filter_count)
-        self._tab_n2k.counts_changed.connect(self._refresh_filter_count)
-        self._tab_network.counts_changed.connect(self._refresh_filter_count)
-        self._tab_decoded.counts_changed.connect(self._refresh_filter_count)
-        self._tabs.currentChanged.connect(self._refresh_filter_count)
+        self._filter_bar.changed.connect(self._update_filter_indicator)
+        self._update_filter_indicator()
+        self._filter_bar.setVisible(False)   # hidden until toggled via the toolbar 🔍
 
         central = QWidget()
         cl = QVBoxLayout(central)
@@ -189,14 +218,17 @@ class MainWindow(QMainWindow):
         self._tab_n2k.apply_filter(spec)
         self._tab_network.apply_filter(spec)
         self._tab_decoded.apply_filter(spec)
-        self._refresh_filter_count()
 
-    def _refresh_filter_count(self, *_args) -> None:
-        tab = self._tabs.currentWidget()
-        fn  = getattr(tab, "filter_counts", None)
-        if fn is not None:
-            visible, total = fn()
-            self._filter_bar.set_counts(visible, total)
+    def _toggle_filter_bar(self, *_args) -> None:
+        self._filter_bar.setVisible(not self._filter_bar.isVisible())
+
+    def _update_filter_indicator(self, *_args) -> None:
+        # Amber when the filter is actively narrowing results, so the toolbar
+        # toggle signals it even while the bar (and its own On/Off tint) is hidden.
+        if self._filter_toggle_btn is None:
+            return
+        active = self._filter_bar.is_active_filter()
+        self._filter_toggle_btn.setStyleSheet(_FILTER_ACTIVE_STYLE if active else "")
 
     def _update_tab_warnings(self) -> None:
         tabs = (self._tab_raw, self._tab_n2k, self._tab_network, self._tab_decoded)

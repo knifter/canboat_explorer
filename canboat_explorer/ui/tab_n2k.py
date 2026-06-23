@@ -5,7 +5,7 @@ from typing import Any
 
 from PyQt6.QtCore import (
     QAbstractTableModel, QItemSelection, QItemSelectionModel, QModelIndex,
-    Qt, QTimer, pyqtSignal,
+    Qt, QTimer,
 )
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
@@ -318,8 +318,6 @@ class N2KAccumViewModel(QAbstractTableModel):
 
 
 class N2KTab(QWidget):
-    counts_changed = pyqtSignal()
-
     def __init__(self, store: DataStore) -> None:
         super().__init__()
         self._store       = store
@@ -397,7 +395,6 @@ class N2KTab(QWidget):
             rows_str = (f"{shown:,} of {rows_total:,} rows" if shown != rows_total
                         else f"{shown:,} rows")
             self._count_label.setText(f"{rows_str}  ({total:,} messages, {rate_str}){held_str}")
-        self.counts_changed.emit()
 
     def set_held(self, held: int | None) -> None:
         """Tell the tab how many frames are held in the input queue (paused)."""

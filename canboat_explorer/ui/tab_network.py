@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import time
 
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QBrush, QColor, QFont
 from PyQt6.QtWidgets import (
-    QHeaderView, QLabel, QListWidget, QSplitter, QTreeWidget,
+    QHBoxLayout, QHeaderView, QLabel, QListWidget, QSplitter, QTreeWidget,
     QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -43,8 +43,6 @@ def _pgn_label(pgn: int) -> str:
 
 
 class NetworkTab(QWidget):
-    counts_changed = pyqtSignal()
-
     def __init__(self, store: DataStore) -> None:
         super().__init__()
         self._store            = store
@@ -81,9 +79,17 @@ class NetworkTab(QWidget):
         splitter.addWidget(log_widget)
         splitter.setSizes([600, 150])
 
+        self._count_label = QLabel("")
+        top = QHBoxLayout()
+        top.setContentsMargins(4, 2, 6, 2)
+        top.addStretch()
+        top.addWidget(self._count_label)
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(splitter)
+        layout.addLayout(top)
+        layout.addWidget(splitter, 1)   # splitter takes all spare height; count row stays thin
+        self._update_count()
 
         self._stale_timer = QTimer(self)
         self._stale_timer.setInterval(10_000)
@@ -105,7 +111,7 @@ class NetworkTab(QWidget):
         self._append_log()
         if self._filter_active:        # hide any newly-added nodes that don't match
             self._apply_filter_tree()
-        self.counts_changed.emit()
+        self._update_count()
 
     def reset(self) -> None:
         self._tree.clear()
@@ -118,6 +124,7 @@ class NetworkTab(QWidget):
         self._last_decoded_len = 0
         self._log_processed    = 0
         self._filter_vis       = 0
+        self._update_count()
 
     # ------------------------------------------------------------------
     # Global filter (tree pruning)
@@ -127,12 +134,20 @@ class NetworkTab(QWidget):
         self._filter_spec   = spec
         self._filter_active = not spec.is_empty
         self._apply_filter_tree()
+        self._update_count()
 
     def filter_counts(self) -> tuple[int, int]:
         total = len(self._pgn_items)
         if not self._filter_active:
             return total, total
         return self._filter_vis, total
+
+    def _update_count(self) -> None:
+        visible, total = self.filter_counts()
+        if visible != total:
+            self._count_label.setText(f"showing {visible:,} of {total:,} PGNs")
+        else:
+            self._count_label.setText(f"{total:,} PGNs")
 
     def _leaf_matches_filter(self, sa: int, dev_label: str, leaf: QTreeWidgetItem, pgn: int) -> bool:
         flag = self._store.get_user_flag_by_pgn(pgn)
@@ -175,7 +190,6 @@ class NetworkTab(QWidget):
                 info.setHidden(not sa_show)
             vis += sa_leaf_vis
         self._filter_vis = vis
-        self.counts_changed.emit()
 
     def has_warnings(self) -> bool:
         return bool(self._store.sa_pgn_collisions)

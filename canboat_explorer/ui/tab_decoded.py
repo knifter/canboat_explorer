@@ -3,10 +3,10 @@ from __future__ import annotations
 import time
 from collections import deque
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QBrush, QColor, QFont
 from PyQt6.QtWidgets import (
-    QAbstractItemView, QHeaderView, QLabel, QSplitter,
+    QAbstractItemView, QHBoxLayout, QHeaderView, QLabel, QSizePolicy, QSplitter,
     QTableWidget, QTableWidgetItem, QTreeWidget, QTreeWidgetItem,
     QVBoxLayout, QWidget,
 )
@@ -61,8 +61,6 @@ def _rate_label(dq: deque) -> str:
 
 
 class DecodedTab(QWidget):
-    counts_changed = pyqtSignal()
-
     def __init__(self, store: DataStore) -> None:
         super().__init__()
         self._store            = store
@@ -77,7 +75,16 @@ class DecodedTab(QWidget):
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
-        # ---- left: signal tree ----
+        # ---- left: signal tree; an empty strip above it mirrors the right
+        # pane's header height so the two pane tops line up into one bar ----
+        left = QWidget()
+        ll = QVBoxLayout(left)
+        ll.setContentsMargins(4, 4, 4, 4)
+
+        spacer = QLabel("")
+        spacer.setStyleSheet("padding: 2px;")
+        ll.addWidget(spacer)
+
         self._tree = QTreeWidget()
         self._tree.setColumnCount(3)
         self._tree.setHeaderLabels(["Signal", "PGN", "Rate"])
@@ -91,16 +98,35 @@ class DecodedTab(QWidget):
         self._tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self._tree.itemSelectionChanged.connect(self._on_selection_changed)
         self._tree.itemExpanded.connect(self._on_item_expanded)
-        splitter.addWidget(self._tree)
+        ll.addWidget(self._tree)
+        self._left_pane = left
+        splitter.addWidget(left)
 
-        # ---- right: field table ----
+        # ---- right: field table, with breadcrumb (left) + count (right) above ----
         right = QWidget()
         rl = QVBoxLayout(right)
         rl.setContentsMargins(4, 4, 4, 4)
 
+        hdr_row = QHBoxLayout()
+        hdr_row.setContentsMargins(0, 0, 0, 0)
+
         self._hdr_label = QLabel("")
         self._hdr_label.setStyleSheet("font-weight: bold; padding: 2px;")
-        rl.addWidget(self._hdr_label)
+        # A long breadcrumb should clip, not widen (and so resize) this strip;
+        # the Ignored policy also lets it fill the slack and push the count right.
+        self._hdr_label.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+        )
+        hdr_row.addWidget(self._hdr_label, 1)   # stretch 1 → eats the slack, pins count hard right
+
+        self._count_label = QLabel("")
+        self._count_label.setStyleSheet("padding: 2px;")
+        self._count_label.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        hdr_row.addWidget(self._count_label)
+
+        rl.addLayout(hdr_row)
 
         self._table = QTableWidget(0, 3)
         self._table.setHorizontalHeaderLabels(["Field", "Value", "Unit"])
@@ -122,6 +148,7 @@ class DecodedTab(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(splitter)
+        self._update_count()
 
     # ------------------------------------------------------------------
     # Public API
@@ -149,7 +176,7 @@ class DecodedTab(QWidget):
             self._fit_left_pane()
             if self._filter_active:       # hide any newly-added nodes that don't match
                 self._apply_filter_tree()
-            self.counts_changed.emit()
+            self._update_count()
         if any_changed:
             self._refresh_selection()
 
@@ -164,6 +191,7 @@ class DecodedTab(QWidget):
         self._table.setRowCount(0)
         self._hdr_label.setText("")
         self._filter_vis = 0
+        self._update_count()
 
     # ------------------------------------------------------------------
     # Global filter (tree pruning)
@@ -173,12 +201,20 @@ class DecodedTab(QWidget):
         self._filter_spec   = spec
         self._filter_active = not spec.is_empty
         self._apply_filter_tree()
+        self._update_count()
 
     def filter_counts(self) -> tuple[int, int]:
         total = len(self._leaf_items)
         if not self._filter_active:
             return total, total
         return self._filter_vis, total
+
+    def _update_count(self) -> None:
+        visible, total = self.filter_counts()
+        if visible != total:
+            self._count_label.setText(f"showing {visible:,} of {total:,} signals")
+        else:
+            self._count_label.setText(f"{total:,} signals")
 
     def _leaf_matches_filter(self, pgn: int, sa: int, leaf: QTreeWidgetItem) -> bool:
         flag     = self._store.get_user_flag_by_pgn(pgn)
@@ -210,7 +246,6 @@ class DecodedTab(QWidget):
                                    for i in range(pgn_item.childCount()))
             pgn_item.setHidden(not any_vis)
         self._filter_vis = vis
-        self.counts_changed.emit()
 
     def has_warnings(self) -> bool:
         return False
@@ -303,8 +338,12 @@ class DecodedTab(QWidget):
         rate = int(self._tree.sizeHintForColumn(2) * 1.3)
         self._tree.setColumnWidth(1, pgn)
         self._tree.setColumnWidth(2, rate)
-        # + fixed allowance for the vertical scrollbar, frame and padding.
-        self._tree.setMaximumWidth(sig + pgn + rate + 2 * self._tree.frameWidth() + 32)
+        # + fixed allowance for the vertical scrollbar, frame, padding and the
+        # left pane's content margins (cap the container so the count strip above
+        # the tree spans the same width as the tree).
+        self._left_pane.setMaximumWidth(
+            sig + pgn + rate + 2 * self._tree.frameWidth() + 32 + 8
+        )
 
     # ------------------------------------------------------------------
     # Selection

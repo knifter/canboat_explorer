@@ -13,12 +13,16 @@ from typing import Callable
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QMouseEvent
 from PyQt6.QtWidgets import (
-    QHBoxLayout, QLabel, QLineEdit, QMenu, QPushButton, QWidget,
+    QCheckBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QMenu, QPushButton,
+    QWidget,
 )
 
 from canboat_explorer.core.filter import FilterSpec, parse_int_list
 
 _DEBOUNCE_MS = 200
+
+# Soft amber on the On/Off button while the filter is actively hiding rows.
+_ACTIVE_BTN_STYLE = "QPushButton { background-color: #e6b24a; color: black; }"
 
 # Returns the observed values to offer in the double-click picker, as
 # (value, label) pairs already in display order.
@@ -108,8 +112,6 @@ class FilterBar(QWidget):
         self._clear_btn.setToolTip("Reset every input and toggle.")
         self._clear_btn.clicked.connect(self._on_clear)
 
-        self._count_label = QLabel("—")
-
         self._debounce = QTimer(self)
         self._debounce.setSingleShot(True)
         self._debounce.setInterval(_DEBOUNCE_MS)
@@ -118,8 +120,16 @@ class FilterBar(QWidget):
         for edit in (self._pgn_edit, self._sa_edit, self._text_edit):
             edit.textChanged.connect(self._debounce.start)
 
+        # Keep the On/Off button's "actively filtering" tint in sync with state.
+        self.changed.connect(self._update_enable_style)
+
         layout = QHBoxLayout(self)
         layout.setContentsMargins(6, 3, 6, 3)
+        layout.addWidget(self._enable_btn)
+        layout.addWidget(self._clear_btn)
+        layout.addSpacing(8)
+        layout.addWidget(self._vline())
+        layout.addSpacing(8)
         layout.addWidget(QLabel("PGN:"))
         layout.addWidget(self._pgn_edit)
         layout.addWidget(QLabel("SA:"))
@@ -128,21 +138,26 @@ class FilterBar(QWidget):
         layout.addSpacing(8)
         layout.addWidget(self._warn_btn)
         layout.addWidget(self._err_btn)
-        layout.addWidget(self._hl_btn)
-        layout.addWidget(self._ignore_btn)
-        layout.addSpacing(8)
-        layout.addWidget(self._enable_btn)
-        layout.addWidget(self._clear_btn)
+        # Highlighted / Hide-ignored not wired into the tabs yet — keep the
+        # widgets (so spec/clear stay intact) but don't show them for now.
+        # layout.addWidget(self._hl_btn)
+        # layout.addWidget(self._ignore_btn)
         layout.addStretch()
-        layout.addWidget(self._count_label)
 
-    def _toggle(self, label: str, tip: str) -> QPushButton:
-        btn = QPushButton(label)
-        btn.setCheckable(True)
-        btn.setToolTip(tip)
+        self._update_enable_style()
+
+    def _toggle(self, label: str, tip: str) -> QCheckBox:
+        box = QCheckBox(label)
+        box.setToolTip(tip)
         # Toggles apply immediately (no debounce).
-        btn.toggled.connect(self.changed)
-        return btn
+        box.toggled.connect(self.changed)
+        return box
+
+    def _vline(self) -> QFrame:
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.VLine)
+        line.setFrameShadow(QFrame.Shadow.Sunken)
+        return line
 
     # ------------------------------------------------------------------
     # Public API
@@ -164,6 +179,12 @@ class FilterBar(QWidget):
             hide_ignored=self._ignore_btn.isChecked(),
         )
 
+    def is_active_filter(self) -> bool:
+        """True when the filter is on and actually narrowing results — i.e. the
+        On/Off button is on and at least one condition is set. (Mirrors the
+        amber tint logic so an external indicator can match it.)"""
+        return not self.spec.is_empty
+
     def set_sources(self, pgn_source: ValueSource, sa_source: ValueSource) -> None:
         """Wire the double-click pickers to live observed-value providers."""
         self._pgn_edit.set_source(pgn_source)
@@ -173,12 +194,6 @@ class FilterBar(QWidget):
         self._text_edit.setFocus(Qt.FocusReason.ShortcutFocusReason)
         self._text_edit.selectAll()
 
-    def set_counts(self, visible: int, total: int) -> None:
-        if self.spec.is_empty:
-            self._count_label.setText(f"{total:,} rows")
-        else:
-            self._count_label.setText(f"showing {visible:,} of {total:,}")
-
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
@@ -186,6 +201,13 @@ class FilterBar(QWidget):
     def _on_enable_toggled(self, on: bool) -> None:
         self._enable_btn.setText("Filter: On" if on else "Filter: Off")
         self.changed.emit()
+
+    def _update_enable_style(self) -> None:
+        # Tint the On/Off button while the filter is on AND has conditions set,
+        # so it's obvious that rows are being hidden. (spec.is_empty is True both
+        # when off and when on-but-blank.)
+        active = not self.spec.is_empty
+        self._enable_btn.setStyleSheet(_ACTIVE_BTN_STYLE if active else "")
 
     def _on_clear(self) -> None:
         widgets = (self._pgn_edit, self._sa_edit, self._text_edit,
