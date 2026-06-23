@@ -193,10 +193,10 @@ class NetworkTab(QWidget):
         self._filter_vis = vis
 
     def has_warnings(self) -> bool:
-        return bool(self._store.sa_pgn_collisions)
+        return bool(self._data_collisions())
 
     def warning_text(self) -> str:
-        cols = self._store.sa_pgn_collisions
+        cols = self._data_collisions()
         if not cols:
             return ""
         pgns = ", ".join(str(p) for p in sorted(cols))
@@ -206,6 +206,12 @@ class NetworkTab(QWidget):
     # ------------------------------------------------------------------
     # Data helpers
     # ------------------------------------------------------------------
+
+    def _data_collisions(self) -> set[int]:
+        # Management PGNs (heartbeat, address claim, …) are emitted by every
+        # device, so "same PGN from multiple source addresses" is expected for
+        # them — not a real collision. Keep them out of the ⚠ warning.
+        return self._store.sa_pgn_collisions - _MGMT_PGNS
 
     def _collision_tooltip(self, pgn: int) -> str:
         name     = pgn_name(pgn)
@@ -235,7 +241,7 @@ class NetworkTab(QWidget):
 
     def _reconcile(self) -> None:
         now        = time.time()
-        collisions = self._store.sa_pgn_collisions
+        collisions = self._data_collisions()
         for sa in sorted(self._store.devices):
             self._reconcile_sa(sa, self._store.devices[sa], collisions, now)
 
