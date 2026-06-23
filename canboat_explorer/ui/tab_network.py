@@ -24,10 +24,11 @@ _ROLE_SECTION = Qt.ItemDataRole.UserRole + 3   # section id on a header item
 _ROLE_PGN     = Qt.ItemDataRole.UserRole + 4   # pgn on a leaf item
 
 # Canonical ordering of section headers under an SA node.
-_SECTION_ORDER = {"tx": 0, "rx": 1, "ua": 2, "obs": 0}
+_SECTION_ORDER = {"tx": 0, "rx": 1, "ua": 2, "obs": 0, "ps": 3}
 
-# PGNs that every N2K device sends as normal bookkeeping — excluded from
-# "Observed / not advertised" noise.
+# PGNs that every N2K device sends as normal bookkeeping — split out of the
+# Observed lists into a collapsed "Protocol Specific" section so they don't
+# drown the device's own data PGNs.
 _MGMT_PGNS = {59904, 60928, 126208, 126464, 126992, 126993, 126996, 126998, 65240}
 
 
@@ -312,6 +313,16 @@ class NetworkTab(QWidget):
                 self._reconcile_pgns(hdr, sa, "obs", visible, dev, collisions)
                 present.add("obs")
 
+        # ---- protocol-specific (management) PGNs, collapsed by default ----
+        protocol = sorted((dev.seen_pgns - dev.tx_pgns - dev.rx_pgns) & _MGMT_PGNS)
+        if protocol:
+            hdr = self._ensure_section(
+                sa_item, sa, "ps", f"Protocol Specific ({len(protocol)})",
+                expanded=False,
+            )
+            self._reconcile_pgns(hdr, sa, "ps", protocol, dev, collisions)
+            present.add("ps")
+
         self._remove_absent_sections(sa, present)
 
     def _reconcile_pgns(
@@ -362,13 +373,16 @@ class NetworkTab(QWidget):
 
     def _ensure_section(
         self, sa_item: QTreeWidgetItem, sa: int, section_id: str, label: str,
+        expanded: bool = True,
     ) -> QTreeWidgetItem:
         hdr = self._section_items.get((sa, section_id))
         if hdr is None:
             hdr = self._section_item(label)
             hdr.setData(0, _ROLE_SECTION, section_id)
             sa_item.insertChild(self._section_insert_index(sa_item, sa, section_id), hdr)
-            hdr.setExpanded(True)
+            # Only the initial expansion is forced; a later reconcile leaves the
+            # user's manual expand/collapse of the section untouched.
+            hdr.setExpanded(expanded)
             self._section_items[(sa, section_id)] = hdr
         elif hdr.text(0) != label:
             hdr.setText(0, label)
