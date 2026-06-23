@@ -5,7 +5,7 @@ from typing import Any
 
 from PyQt6.QtCore import (
     QAbstractTableModel, QItemSelection, QItemSelectionModel, QModelIndex,
-    Qt, QTimer,
+    Qt, QTimer, pyqtSignal,
 )
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (
 )
 
 from canboat_explorer.core.fast_packet import N2KMessage
+from canboat_explorer.core.filter import FilterSpec
 from canboat_explorer.core.store import DataStore, Priority
 
 _COLOR_IGNORE    = QColor(160, 160, 160)
@@ -83,9 +84,21 @@ class N2KTimeViewModel(QAbstractTableModel):
     def __init__(self, store: DataStore) -> None:
         super().__init__()
         self._store = store
+        self._filter_spec    = FilterSpec()
+        self._filter_active  = False
+        self._filter_visible: list[int] = []       # store indices passing the filter (ascending)
+        self._filter_processed = 0
 
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
+        return len(self._filter_visible) if self._filter_active else len(self._store.n2k_messages)
+
+    def unfiltered_count(self) -> int:
         return len(self._store.n2k_messages)
+
+    def _store_index(self, view_row: int) -> int:
+        if self._filter_active:
+            return self._filter_visible[len(self._filter_visible) - 1 - view_row]
+        return len(self._store.n2k_messages) - 1 - view_row
 
     def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
         return len(_COLS_TIME)
@@ -104,7 +117,7 @@ class N2KTimeViewModel(QAbstractTableModel):
     def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> Any:
         if not index.isValid():
             return None
-        row = len(self._store.n2k_messages) - 1 - index.row()
+        row = self._store_index(index.row())
         if row < 0 or row >= len(self._store.n2k_messages):
             return None
         msg = self._store.n2k_messages[row]
@@ -140,7 +153,37 @@ class N2KTimeViewModel(QAbstractTableModel):
 
         return None
 
+    def _passes_filter(self, i: int) -> bool:
+        msg  = self._store.n2k_messages[i]
+        flag = _flag_for_message(self._store, msg)
+        return _msg_matches_filter(self._filter_spec, self._store, msg, flag)
+
+    def set_filter(self, spec: FilterSpec) -> None:
+        self._filter_spec   = spec
+        self._filter_active = not spec.is_empty
+        self._rebuild_filter()
+        self.layoutChanged.emit()
+
+    def _rebuild_filter(self) -> None:
+        n = len(self._store.n2k_messages)
+        self._filter_visible   = [i for i in range(n) if self._passes_filter(i)] if self._filter_active else []
+        self._filter_processed = n
+
     def refresh(self) -> None:
+        n = len(self._store.n2k_messages)
+        if self._filter_processed > n:               # store reset / shrunk under us
+            self._rebuild_filter()
+        elif self._filter_active:                    # incrementally classify new messages
+            for i in range(self._filter_processed, n):
+                if self._passes_filter(i):
+                    self._filter_visible.append(i)
+            self._filter_processed = n
+        else:
+            self._filter_processed = n
+        self.layoutChanged.emit()
+
+    def reset(self) -> None:
+        self._rebuild_filter()
         self.layoutChanged.emit()
 
 
@@ -163,19 +206,50 @@ def _reason_for_message(msg: N2KMessage) -> str:
     return ""
 
 
+def _msg_matches_filter(spec: FilterSpec, store: DataStore, msg: N2KMessage, flag: Priority) -> bool:
+    """Test an NMEA-2000 message row against the global filter; flag booleans
+    come from the already-computed effective flag so they match what's painted."""
+    return spec.matches(
+        pgn=msg.pgn, sa=msg.sa,
+        text=store.pgn_sa_name(msg.pgn, msg.sa),
+        is_warning=(flag == "warning"),
+        is_error=(flag == "error"),
+        is_highlighted=(flag == "highlight"),
+        is_ignored=(flag == "ignore"),
+    )
+
+
 class N2KAccumViewModel(QAbstractTableModel):
     def __init__(self, store: DataStore) -> None:
         super().__init__()
         self._store = store
         self._keys_cache: list | None = None
+        self._filter_spec = FilterSpec()
+
+    def set_filter(self, spec: FilterSpec) -> None:
+        self._filter_spec = spec
+        self._keys_cache = None
+        self.layoutChanged.emit()
+
+    def _passes_filter_entry(self, entry) -> bool:
+        msg  = entry.last_msg
+        flag = _flag_for_message(self._store, msg)
+        return _msg_matches_filter(self._filter_spec, self._store, msg, flag)
 
     def _keys(self) -> list:
         if self._keys_cache is None:
-            self._keys_cache = list(self._store.n2k_by_pgn_sa.keys())
+            d = self._store.n2k_by_pgn_sa
+            if self._filter_spec.is_empty:
+                self._keys_cache = list(d.keys())
+            else:
+                self._keys_cache = [k for k, e in d.items() if self._passes_filter_entry(e)]
         return self._keys_cache
 
-    def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
+    def unfiltered_count(self) -> int:
         return len(self._store.n2k_by_pgn_sa)
+
+    def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
+        return len(self._keys())
 
     def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
         return len(_COLS_ACCUM)
@@ -244,6 +318,8 @@ class N2KAccumViewModel(QAbstractTableModel):
 
 
 class N2KTab(QWidget):
+    counts_changed = pyqtSignal()
+
     def __init__(self, store: DataStore) -> None:
         super().__init__()
         self._store       = store
@@ -311,10 +387,17 @@ class N2KTab(QWidget):
         rate_str = f"{rate:,.0f}/s" if rate is not None else "—/s"
         held_str = f"  [{self._held:,} frames held]" if self._held is not None else ""
         if self._view.model() is self._time_model:
-            self._count_label.setText(f"{total:,} messages  ({rate_str}){held_str}")
+            shown = self._time_model.rowCount()
+            msgs_str = (f"{shown:,} of {total:,} messages" if shown != total
+                        else f"{total:,} messages")
+            self._count_label.setText(f"{msgs_str}  ({rate_str}){held_str}")
         else:
-            rows = self._accum_model.rowCount()
-            self._count_label.setText(f"{rows:,} rows  ({total:,} messages, {rate_str}){held_str}")
+            shown      = self._accum_model.rowCount()
+            rows_total = self._accum_model.unfiltered_count()
+            rows_str = (f"{shown:,} of {rows_total:,} rows" if shown != rows_total
+                        else f"{shown:,} rows")
+            self._count_label.setText(f"{rows_str}  ({total:,} messages, {rate_str}){held_str}")
+        self.counts_changed.emit()
 
     def set_held(self, held: int | None) -> None:
         """Tell the tab how many frames are held in the input queue (paused)."""
@@ -373,9 +456,22 @@ class N2KTab(QWidget):
             sm.setCurrentIndex(model.index(cur_row + added, 0),
                                QItemSelectionModel.SelectionFlag.NoUpdate)
 
+    def apply_filter(self, spec: FilterSpec) -> None:
+        self._time_model.set_filter(spec)
+        self._accum_model.set_filter(spec)
+        self._displayed_count = self._time_model.rowCount()
+        self._view.scrollToTop()
+        self._update_count()
+
+    def filter_counts(self) -> tuple[int, int]:
+        if self._view.model() is self._time_model:
+            return self._time_model.rowCount(), self._time_model.unfiltered_count()
+        return self._accum_model.rowCount(), self._accum_model.unfiltered_count()
+
     def reset(self) -> None:
-        self._time_model.refresh()
+        self._time_model.reset()
         self._accum_model.reset()
+        self._displayed_count = self._time_model.rowCount()
         self._update_count()
 
     def has_warnings(self) -> bool:

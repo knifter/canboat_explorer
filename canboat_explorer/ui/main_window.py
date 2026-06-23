@@ -164,7 +164,11 @@ class MainWindow(QMainWindow):
         self._tabs.addTab(self._tab_decoded, self._TAB_NAMES[3])
 
         self._filter_bar = FilterBar()
-        self._filter_bar.set_sources(self._pgn_values, self._sa_values)
+        self._filter_bar.set_sources(self._filter_pgn_values, self._filter_sa_values)
+        self._filter_bar.changed.connect(self._apply_filter)
+        self._tab_raw.counts_changed.connect(self._refresh_filter_count)
+        self._tab_n2k.counts_changed.connect(self._refresh_filter_count)
+        self._tabs.currentChanged.connect(self._refresh_filter_count)
 
         central = QWidget()
         cl = QVBoxLayout(central)
@@ -176,6 +180,19 @@ class MainWindow(QMainWindow):
 
         sc = QShortcut(QKeySequence("Ctrl+F"), self)
         sc.activated.connect(self._filter_bar.focus_search)
+
+    def _apply_filter(self, *_args) -> None:
+        spec = self._filter_bar.spec
+        self._tab_raw.apply_filter(spec)
+        self._tab_n2k.apply_filter(spec)
+        self._refresh_filter_count()
+
+    def _refresh_filter_count(self, *_args) -> None:
+        tab = self._tabs.currentWidget()
+        fn  = getattr(tab, "filter_counts", None)
+        if fn is not None:
+            visible, total = fn()
+            self._filter_bar.set_counts(visible, total)
 
     def _update_tab_warnings(self) -> None:
         tabs = (self._tab_raw, self._tab_n2k, self._tab_network, self._tab_decoded)
@@ -193,7 +210,7 @@ class MainWindow(QMainWindow):
     # Filter-bar value pickers (observed PGNs / SAs, read live)
     # ------------------------------------------------------------------
 
-    def _pgn_values(self) -> list[tuple[int, str]]:
+    def _filter_pgn_values(self) -> list[tuple[int, str]]:
         from canboat_explorer.core.pgn_catalogue import pgn_name
         out: list[tuple[int, str]] = []
         for pgn in sorted(self._store.by_pgn):
@@ -201,7 +218,7 @@ class MainWindow(QMainWindow):
             out.append((pgn, f"{pgn}  {name}" if name else str(pgn)))
         return out
 
-    def _sa_values(self) -> list[tuple[int, str]]:
+    def _filter_sa_values(self) -> list[tuple[int, str]]:
         out: list[tuple[int, str]] = []
         for sa in sorted(self._store.devices):
             dev = self._store.devices[sa]
@@ -307,7 +324,7 @@ class MainWindow(QMainWindow):
         self._redirect_log(path, write_frames=None)
         self._store.reset_memory()
         self._store.bulk_load(frames)
-        self._tab_raw.on_frames_added()
+        self._tab_raw.reset()
         self._tab_n2k.reset()
         self._tab_n2k.on_messages_added()
         self._tab_network.reset()
@@ -339,7 +356,7 @@ class MainWindow(QMainWindow):
         self._session_path.write_bytes(b"")
         self._store.log = SessionLog(self._session_path, append=True)
         self._store.reset_memory()
-        self._tab_raw.on_frames_added()
+        self._tab_raw.reset()
         self._tab_n2k.reset()
         self._tab_network.reset()
         self._tab_decoded.reset()

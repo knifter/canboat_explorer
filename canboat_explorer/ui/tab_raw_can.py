@@ -5,7 +5,7 @@ from typing import Any
 
 from PyQt6.QtCore import (
     QAbstractTableModel, QItemSelection, QItemSelectionModel, QModelIndex,
-    Qt, QTimer,
+    Qt, QTimer, pyqtSignal,
 )
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import (
     QWidget, QHeaderView,
 )
 
+from canboat_explorer.core.filter import FilterSpec
 from canboat_explorer.core.n2k_frame_info import n2k_frame_info
 from canboat_explorer.core.store import DataStore, Priority
 
@@ -72,6 +73,25 @@ def _fmt_time(ts: float) -> str:
     return f"{t.tm_hour:02d}:{t.tm_min:02d}:{t.tm_sec:02d}.{ms:03d}"
 
 
+def _row_matches_filter(spec: FilterSpec, store: DataStore, frame, n2k, flag: Priority) -> bool:
+    """Test a Raw-CAN row against the global filter. The flag booleans are
+    derived from the already-computed effective flag so they match what's
+    painted; non-N2K frames pass PGN/SA/text through (None / "")."""
+    if n2k is not None:
+        pgn, sa = n2k.pgn, n2k.sa
+        text    = store.pgn_sa_name(pgn, sa)
+    else:
+        pgn = sa = None
+        text = ""
+    return spec.matches(
+        pgn=pgn, sa=sa, text=text,
+        is_warning=(flag == "warning"),
+        is_error=(flag == "error" or frame.is_error_frame),
+        is_highlighted=(flag == "highlight"),
+        is_ignored=(flag == "ignore"),
+    )
+
+
 def _apply_selection_band(view: QTableView) -> None:
     """Force a flat, continuous selection band over the whole row.
 
@@ -95,9 +115,22 @@ class TimeViewModel(QAbstractTableModel):
     def __init__(self, store: DataStore) -> None:
         super().__init__()
         self._store = store
+        self._filter_spec    = FilterSpec()
+        self._filter_active  = False               # False = no filter; use direct mapping
+        self._filter_visible: list[int] = []       # store indices passing the filter (ascending)
+        self._filter_processed = 0                 # store frames already classified
 
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
+        return len(self._filter_visible) if self._filter_active else len(self._store.frames)
+
+    def unfiltered_count(self) -> int:
         return len(self._store.frames)
+
+    def _store_index(self, view_row: int) -> int:
+        """Map a display row (0 = newest) to an index into store.frames."""
+        if self._filter_active:
+            return self._filter_visible[len(self._filter_visible) - 1 - view_row]
+        return len(self._store.frames) - 1 - view_row
 
     def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
         return len(_COLS_TIME)
@@ -125,7 +158,7 @@ class TimeViewModel(QAbstractTableModel):
                 return _COLOR_SEP_BG
             return None
 
-        row = len(self._store.frames) - 1 - index.row()
+        row = self._store_index(index.row())
         if row < 0 or row >= len(self._store.frames):
             return None
         frame = self._store.frames[row]
@@ -189,7 +222,39 @@ class TimeViewModel(QAbstractTableModel):
             return "warning"
         return None
 
+    def _passes_filter(self, i: int) -> bool:
+        frame = self._store.frames[i]
+        n2k   = n2k_frame_info(frame)
+        flag  = self._flag_for(frame, n2k)
+        return _row_matches_filter(self._filter_spec, self._store, frame, n2k, flag)
+
+    def set_filter(self, spec: FilterSpec) -> None:
+        self._filter_spec   = spec
+        self._filter_active = not spec.is_empty
+        self._rebuild_filter()
+        self.layoutChanged.emit()
+
+    def _rebuild_filter(self) -> None:
+        n = len(self._store.frames)
+        self._filter_visible   = [i for i in range(n) if self._passes_filter(i)] if self._filter_active else []
+        self._filter_processed = n
+
     def refresh(self) -> None:
+        n = len(self._store.frames)
+        if self._filter_processed > n:               # store reset / shrunk under us
+            self._rebuild_filter()
+        elif self._filter_active:                    # incrementally classify new frames
+            for i in range(self._filter_processed, n):
+                if self._passes_filter(i):
+                    self._filter_visible.append(i)
+            self._filter_processed = n
+        else:
+            self._filter_processed = n
+        self.layoutChanged.emit()
+
+    def reset(self) -> None:
+        """Force a full reclassify (store contents replaced — old indices stale)."""
+        self._rebuild_filter()
         self.layoutChanged.emit()
 
 
@@ -203,9 +268,15 @@ class AccumViewModel(QAbstractTableModel):
         self._store = store
         self._mode  = 0   # index into _GROUP_MODES
         self._keys_cache: list | None = None
+        self._filter_spec = FilterSpec()
 
     def set_mode(self, mode_index: int) -> None:
         self._mode = mode_index
+        self._keys_cache = None
+        self.layoutChanged.emit()
+
+    def set_filter(self, spec: FilterSpec) -> None:
+        self._filter_spec = spec
         self._keys_cache = None
         self.layoutChanged.emit()
 
@@ -214,13 +285,26 @@ class AccumViewModel(QAbstractTableModel):
         if self._mode == 2: return self._store.by_pgn
         return self._store.by_arb_id
 
+    def _passes_filter_entry(self, entry) -> bool:
+        frame = entry.last_frame
+        n2k   = n2k_frame_info(frame)
+        flag  = self._flag_for(frame, n2k)
+        return _row_matches_filter(self._filter_spec, self._store, frame, n2k, flag)
+
     def _keys(self) -> list:
         if self._keys_cache is None:
-            self._keys_cache = list(self._active_dict().keys())
+            d = self._active_dict()
+            if self._filter_spec.is_empty:
+                self._keys_cache = list(d.keys())
+            else:
+                self._keys_cache = [k for k, e in d.items() if self._passes_filter_entry(e)]
         return self._keys_cache
 
-    def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
+    def unfiltered_count(self) -> int:
         return len(self._active_dict())
+
+    def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
+        return len(self._keys())
 
     def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
         return len(_COLS_ACCUM)
@@ -306,8 +390,14 @@ class AccumViewModel(QAbstractTableModel):
         self._keys_cache = None
         self.layoutChanged.emit()
 
+    def reset(self) -> None:
+        self._keys_cache = None
+        self.layoutChanged.emit()
+
 
 class RawCanTab(QWidget):
+    counts_changed = pyqtSignal()
+
     def __init__(self, store: DataStore) -> None:
         super().__init__()
         self._store       = store
@@ -382,15 +472,21 @@ class RawCanTab(QWidget):
         rate_str = f"{rate:,.0f}/s" if rate is not None else "—/s"
         held_str = f"  [{self._held:,} held]" if self._held is not None else ""
         if model is self._time_model:
-            self._count_label.setText(
-                f"{len(self._store.frames):,} frames  ({rate_str}){held_str}"
-            )
-        else:
-            rows  = self._accum_model.rowCount()
+            shown = self._time_model.rowCount()
             total = len(self._store.frames)
+            frames_str = (f"{shown:,} of {total:,} frames" if shown != total
+                          else f"{total:,} frames")
+            self._count_label.setText(f"{frames_str}  ({rate_str}){held_str}")
+        else:
+            shown      = self._accum_model.rowCount()
+            total      = len(self._store.frames)
+            rows_total = self._accum_model.unfiltered_count()
+            rows_str = (f"{shown:,} of {rows_total:,} rows" if shown != rows_total
+                        else f"{shown:,} rows")
             self._count_label.setText(
-                f"{rows:,} rows  ({total:,} frames, {rate_str}){held_str}"
+                f"{rows_str}  ({total:,} frames, {rate_str}){held_str}"
             )
+        self.counts_changed.emit()
 
     def set_held(self, held: int | None) -> None:
         """Tell the tab how many frames are held in the input queue (paused)."""
@@ -455,6 +551,26 @@ class RawCanTab(QWidget):
         if cur_row >= 0:
             sm.setCurrentIndex(model.index(cur_row + added, 0),
                                QItemSelectionModel.SelectionFlag.NoUpdate)
+
+    def apply_filter(self, spec: FilterSpec) -> None:
+        self._time_model.set_filter(spec)
+        self._accum_model.set_filter(spec)
+        self._displayed_count = self._time_model.rowCount()
+        self._view.scrollToTop()
+        self._update_count()
+
+    def filter_counts(self) -> tuple[int, int]:
+        if self._view.model() is self._time_model:
+            return self._time_model.rowCount(), self._time_model.unfiltered_count()
+        return self._accum_model.rowCount(), self._accum_model.unfiltered_count()
+
+    def reset(self) -> None:
+        """Reclassify both models over the current (reloaded) store contents,
+        keeping the active filter. Called after Open / New."""
+        self._time_model.reset()
+        self._accum_model.reset()
+        self._displayed_count = self._time_model.rowCount()
+        self._update_count()
 
     def has_warnings(self) -> bool:
         return self._store.oob_frame_count > 0
