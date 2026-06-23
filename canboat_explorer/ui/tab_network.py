@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import time
 
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor, QFont
 from PyQt6.QtWidgets import (
     QHeaderView, QLabel, QListWidget, QSplitter, QTreeWidget,
     QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
+from canboat_explorer.core.filter import FilterSpec
 from canboat_explorer.core.pgn_catalogue import pgn_name
 from canboat_explorer.core.store import DataStore, DeviceInfo
 
@@ -42,12 +43,17 @@ def _pgn_label(pgn: int) -> str:
 
 
 class NetworkTab(QWidget):
+    counts_changed = pyqtSignal()
+
     def __init__(self, store: DataStore) -> None:
         super().__init__()
         self._store            = store
         self._last_n2k_count   = 0
         self._last_decoded_len = 0
         self._log_processed    = 0
+        self._filter_spec      = FilterSpec()
+        self._filter_active    = False      # filter currently restricting the tree
+        self._filter_vis       = 0          # visible PGN leaves under the active filter
 
         # Persistent item registries — the tree is updated in place, never
         # cleared, so selection / expansion / scroll / tooltips survive a
@@ -97,6 +103,9 @@ class NetworkTab(QWidget):
         self._last_decoded_len = n_dec
         self._reconcile()
         self._append_log()
+        if self._filter_active:        # hide any newly-added nodes that don't match
+            self._apply_filter_tree()
+        self.counts_changed.emit()
 
     def reset(self) -> None:
         self._tree.clear()
@@ -108,6 +117,65 @@ class NetworkTab(QWidget):
         self._last_n2k_count   = 0
         self._last_decoded_len = 0
         self._log_processed    = 0
+        self._filter_vis       = 0
+
+    # ------------------------------------------------------------------
+    # Global filter (tree pruning)
+    # ------------------------------------------------------------------
+
+    def apply_filter(self, spec: FilterSpec) -> None:
+        self._filter_spec   = spec
+        self._filter_active = not spec.is_empty
+        self._apply_filter_tree()
+
+    def filter_counts(self) -> tuple[int, int]:
+        total = len(self._pgn_items)
+        if not self._filter_active:
+            return total, total
+        return self._filter_vis, total
+
+    def _leaf_matches_filter(self, sa: int, dev_label: str, leaf: QTreeWidgetItem, pgn: int) -> bool:
+        flag = self._store.get_user_flag_by_pgn(pgn)
+        return self._filter_spec.matches(
+            pgn=pgn, sa=sa,
+            text=f"{dev_label} {leaf.text(0)}",   # fold device label in for name search
+            is_highlighted=(flag == "highlight"),
+            is_ignored=(flag == "ignore"),
+        )
+
+    def _apply_filter_tree(self) -> None:
+        spec  = self._filter_spec
+        empty = spec.is_empty
+        vis   = 0
+        for sa, sa_item in self._sa_items.items():
+            dev_label   = sa_item.text(0)
+            sa_leaf_vis = 0
+            for i in range(sa_item.childCount()):
+                section = sa_item.child(i)
+                if section.data(0, _ROLE_SECTION) is None:
+                    continue   # product-info child — follows the SA node's visibility
+                sec_vis = 0
+                for j in range(section.childCount()):
+                    leaf = section.child(j)
+                    pgn  = leaf.data(0, _ROLE_PGN)
+                    ok   = empty or self._leaf_matches_filter(sa, dev_label, leaf, pgn)
+                    leaf.setHidden(not ok)
+                    if ok:
+                        sec_vis += 1
+                section.setHidden(not (empty or sec_vis))
+                sa_leaf_vis += sec_vis
+            # Childless SA still findable by device-name text search.
+            name_hit = (bool(spec.text) and not spec.pgns
+                        and not (spec.warnings or spec.errors or spec.highlighted)
+                        and spec.text in dev_label.lower())
+            sa_show = empty or sa_leaf_vis > 0 or name_hit
+            sa_item.setHidden(not sa_show)
+            info = self._info_items.get(sa)
+            if info is not None:
+                info.setHidden(not sa_show)
+            vis += sa_leaf_vis
+        self._filter_vis = vis
+        self.counts_changed.emit()
 
     def has_warnings(self) -> bool:
         return bool(self._store.sa_pgn_collisions)

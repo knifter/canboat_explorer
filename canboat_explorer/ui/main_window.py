@@ -168,6 +168,8 @@ class MainWindow(QMainWindow):
         self._filter_bar.changed.connect(self._apply_filter)
         self._tab_raw.counts_changed.connect(self._refresh_filter_count)
         self._tab_n2k.counts_changed.connect(self._refresh_filter_count)
+        self._tab_network.counts_changed.connect(self._refresh_filter_count)
+        self._tab_decoded.counts_changed.connect(self._refresh_filter_count)
         self._tabs.currentChanged.connect(self._refresh_filter_count)
 
         central = QWidget()
@@ -185,6 +187,8 @@ class MainWindow(QMainWindow):
         spec = self._filter_bar.spec
         self._tab_raw.apply_filter(spec)
         self._tab_n2k.apply_filter(spec)
+        self._tab_network.apply_filter(spec)
+        self._tab_decoded.apply_filter(spec)
         self._refresh_filter_count()
 
     def _refresh_filter_count(self, *_args) -> None:

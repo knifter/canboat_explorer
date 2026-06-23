@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from collections import deque
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor, QFont
 from PyQt6.QtWidgets import (
     QAbstractItemView, QHeaderView, QLabel, QSplitter,
@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import (
 
 from nmea2000 import FieldTypes
 
+from canboat_explorer.core.filter import FilterSpec
 from canboat_explorer.core.store import DataStore, RATE_WINDOW
 
 _MAX_HISTORY = 20
@@ -60,6 +61,8 @@ def _rate_label(dq: deque) -> str:
 
 
 class DecodedTab(QWidget):
+    counts_changed = pyqtSignal()
+
     def __init__(self, store: DataStore) -> None:
         super().__init__()
         self._store            = store
@@ -68,6 +71,9 @@ class DecodedTab(QWidget):
         self._leaf_items: dict[tuple,       QTreeWidgetItem] = {}
         self._leaf_last_ts: dict[tuple, float] = {}   # per-key timestamp of last shown dq[0]
         self._selected_item: QTreeWidgetItem | None = None
+        self._filter_spec      = FilterSpec()
+        self._filter_active    = False    # filter currently restricting the tree
+        self._filter_vis       = 0        # visible leaves under the active filter
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
@@ -141,6 +147,9 @@ class DecodedTab(QWidget):
             any_changed = True
         if created:
             self._fit_left_pane()
+            if self._filter_active:       # hide any newly-added nodes that don't match
+                self._apply_filter_tree()
+            self.counts_changed.emit()
         if any_changed:
             self._refresh_selection()
 
@@ -154,6 +163,54 @@ class DecodedTab(QWidget):
         self._table.clearSpans()
         self._table.setRowCount(0)
         self._hdr_label.setText("")
+        self._filter_vis = 0
+
+    # ------------------------------------------------------------------
+    # Global filter (tree pruning)
+    # ------------------------------------------------------------------
+
+    def apply_filter(self, spec: FilterSpec) -> None:
+        self._filter_spec   = spec
+        self._filter_active = not spec.is_empty
+        self._apply_filter_tree()
+
+    def filter_counts(self) -> tuple[int, int]:
+        total = len(self._leaf_items)
+        if not self._filter_active:
+            return total, total
+        return self._filter_vis, total
+
+    def _leaf_matches_filter(self, pgn: int, sa: int, leaf: QTreeWidgetItem) -> bool:
+        flag     = self._store.get_user_flag_by_pgn(pgn)
+        pgn_item = self._pgn_items.get(pgn)
+        desc     = pgn_item.text(0) if pgn_item is not None else ""
+        return self._filter_spec.matches(
+            pgn=pgn, sa=sa,
+            text=f"{desc} {leaf.text(0)}",   # fold PGN description in for name search
+            is_highlighted=(flag == "highlight"),
+            is_ignored=(flag == "ignore"),
+        )
+
+    def _apply_filter_tree(self) -> None:
+        empty = self._filter_spec.is_empty
+        vis   = 0
+        for key, leaf in self._leaf_items.items():
+            pgn, sa, _qualifier = key
+            ok = empty or self._leaf_matches_filter(pgn, sa, leaf)
+            leaf.setHidden(not ok)
+            if ok:
+                vis += 1
+        # Intermediate SA nodes, then PGN groups: visible if any child is visible.
+        for sa_item in self._sa_items.values():
+            any_vis = empty or any(not sa_item.child(i).isHidden()
+                                   for i in range(sa_item.childCount()))
+            sa_item.setHidden(not any_vis)
+        for pgn_item in self._pgn_items.values():
+            any_vis = empty or any(not pgn_item.child(i).isHidden()
+                                   for i in range(pgn_item.childCount()))
+            pgn_item.setHidden(not any_vis)
+        self._filter_vis = vis
+        self.counts_changed.emit()
 
     def has_warnings(self) -> bool:
         return False
