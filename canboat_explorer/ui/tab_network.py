@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import (
 )
 
 from canboat_explorer.core.filter import FilterSpec
+from canboat_explorer.core.n2k_frame_info import n2k_frame_info
 from canboat_explorer.core.pgn_catalogue import pgn_name
 from canboat_explorer.core.store import DataStore, DeviceInfo
 
@@ -30,6 +31,15 @@ _SECTION_ORDER = {"tx": 0, "rx": 1, "ua": 2, "obs": 0, "ps": 3}
 # Observed lists into a collapsed "Protocol Specific" section so they don't
 # drown the device's own data PGNs.
 _MGMT_PGNS = {59904, 60928, 126208, 126464, 126992, 126993, 126996, 126998, 65240}
+
+# What an ISO Request (PGN 59904) is asking for — named explicitly in the
+# Protocol Events log; anything else falls back to "PGN <n>".
+_REQUEST_TARGETS = {
+    60928:  "address claim",
+    126464: "PGN list",
+    126996: "product information",
+    126998: "configuration information",
+}
 
 
 def _fmt_time(ts: float) -> str:
@@ -74,7 +84,7 @@ class NetworkTab(QWidget):
         log_widget = QWidget()
         log_layout = QVBoxLayout(log_widget)
         log_layout.setContentsMargins(4, 4, 4, 4)
-        log_layout.addWidget(QLabel("Address Negotiation Events"))
+        log_layout.addWidget(QLabel("Protocol Events"))
         self._log = QListWidget()
         log_layout.addWidget(self._log)
         splitter.addWidget(log_widget)
@@ -493,8 +503,36 @@ class NetworkTab(QWidget):
     def _append_log(self) -> None:
         msgs = self._store.n2k_messages
         for m in msgs[self._log_processed:]:
-            if m.pgn == 60928:  # ISO Address Claim
-                self._log.addItem(f"{_fmt_time(m.timestamp)}  SA:{m.sa}  claimed address")
+            text = self._event_text(m)
+            if text is not None:
+                self._log.addItem(f"{_fmt_time(m.timestamp)}  {text}")
         self._log_processed = len(msgs)
         if self._log.count():
             self._log.scrollToBottom()
+
+    def _event_text(self, m) -> str | None:
+        if m.pgn == 60928:                       # ISO Address Claim
+            return f"SA:{m.sa}  claimed address"
+        if m.pgn == 59904:                       # ISO Request
+            req  = (int.from_bytes(m.payload[:3], "little")
+                    if len(m.payload) >= 3 else None)
+            what = _REQUEST_TARGETS.get(req, f"PGN {req}" if req is not None else "data")
+            dst  = self._msg_dst(m)
+            if dst is None or dst == 255:
+                return f"SA:{m.sa}  requests {what} (broadcast)"
+            return f"SA:{m.sa}  requests {what} from SA:{dst}"
+        if m.pgn == 126996:                      # Product Information
+            return f"SA:{m.sa}  sends product information"
+        if m.pgn == 126464:                      # Transmit/Receive PGN list
+            return f"SA:{m.sa}  sends PGN list"
+        if m.pgn == 126998:                      # Configuration Information
+            return f"SA:{m.sa}  sends configuration information"
+        return None
+
+    def _msg_dst(self, m) -> int | None:
+        """Destination SA of an addressed (PDU1) message, taken from its first
+        CAN frame; None (→ broadcast) when unavailable."""
+        if not m.frames:
+            return None
+        info = n2k_frame_info(m.frames[0])
+        return info.dst if info is not None else None
