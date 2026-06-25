@@ -63,6 +63,7 @@ class NetworkTab(QWidget):
         self._filter_spec      = FilterSpec()
         self._filter_active    = False      # filter currently restricting the tree
         self._filter_vis       = 0          # visible PGN leaves under the active filter
+        self._warnings_were_on = False      # Warnings toggle state last seen, for expand-once
 
         # Persistent item registries — the tree is updated in place, never
         # cleared, so selection / expansion / scroll / tooltips survive a
@@ -144,7 +145,10 @@ class NetworkTab(QWidget):
     def apply_filter(self, spec: FilterSpec) -> None:
         self._filter_spec   = spec
         self._filter_active = not spec.is_empty
-        self._apply_filter_tree()
+        # Expand the nodes holding ⚠ leaves once, on the Warnings off→on edge.
+        expand = spec.warnings and not self._warnings_were_on
+        self._warnings_were_on = spec.warnings
+        self._apply_filter_tree(expand_warnings=expand)
         self._update_count()
 
     def filter_counts(self) -> tuple[int, int]:
@@ -160,36 +164,48 @@ class NetworkTab(QWidget):
         else:
             self._count_label.setText(f"{total:,} PGNs")
 
-    def _leaf_matches_filter(self, sa: int, dev_label: str, leaf: QTreeWidgetItem, pgn: int) -> bool:
+    def _leaf_matches_filter(self, sa: int, dev_label: str, leaf: QTreeWidgetItem, pgn: int,
+                             collisions: set[int]) -> bool:
         flag = self._store.get_user_flag_by_pgn(pgn)
         return self._filter_spec.matches(
             pgn=pgn, sa=sa,
             text=f"{dev_label} {leaf.text(0)}",   # fold device label in for name search
+            is_warning=(pgn in collisions),       # Tab 3 ⚠ = same-PGN-from-multiple-SAs collision
             is_highlighted=(flag == "highlight"),
             is_ignored=(flag == "ignore"),
         )
 
-    def _apply_filter_tree(self) -> None:
-        spec  = self._filter_spec
-        empty = spec.is_empty
-        vis   = 0
+    def _apply_filter_tree(self, expand_warnings: bool = False) -> None:
+        spec       = self._filter_spec
+        empty      = spec.is_empty
+        collisions = self._data_collisions()
+        vis        = 0
         for sa, sa_item in self._sa_items.items():
             dev_label   = sa_item.text(0)
             sa_leaf_vis = 0
+            sa_expand   = False
             for i in range(sa_item.childCount()):
                 section = sa_item.child(i)
                 if section.data(0, _ROLE_SECTION) is None:
                     continue   # product-info child — follows the SA node's visibility
-                sec_vis = 0
+                sec_vis    = 0
+                sec_expand = False
                 for j in range(section.childCount()):
                     leaf = section.child(j)
                     pgn  = leaf.data(0, _ROLE_PGN)
-                    ok   = empty or self._leaf_matches_filter(sa, dev_label, leaf, pgn)
+                    ok   = empty or self._leaf_matches_filter(sa, dev_label, leaf, pgn, collisions)
                     leaf.setHidden(not ok)
                     if ok:
                         sec_vis += 1
+                        if expand_warnings and pgn in collisions:
+                            sec_expand = True
                 section.setHidden(not (empty or sec_vis))
+                if sec_expand:
+                    section.setExpanded(True)
+                    sa_expand = True
                 sa_leaf_vis += sec_vis
+            if sa_expand:
+                sa_item.setExpanded(True)
             # Childless SA still findable by device-name text search.
             name_hit = (bool(spec.text) and not spec.pgns
                         and not (spec.warnings or spec.errors or spec.highlighted)
