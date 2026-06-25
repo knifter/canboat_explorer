@@ -48,6 +48,16 @@ def _fmt_time(ts: float) -> str:
     return f"{t.tm_hour:02d}:{t.tm_min:02d}:{t.tm_sec:02d}.{ms:03d}"
 
 
+def _fmt_since(seconds: float) -> str:
+    """Elapsed time, compact: 12s, 1m15s, 1h00 (hours show zero-padded minutes)."""
+    s = int(seconds)
+    if s < 60:
+        return f"{s}s"
+    if s < 3600:
+        return f"{s // 60}m{s % 60:02d}s"
+    return f"{s // 3600}h{(s % 3600) // 60:02d}"
+
+
 def _pgn_label(pgn: int) -> str:
     name = pgn_name(pgn)
     return f"{pgn}  {name}" if name else str(pgn)
@@ -470,7 +480,7 @@ class NetworkTab(QWidget):
         last_ts = dev.last_seen_ts
         stale   = last_ts > 0 and (now - last_ts) > _STALE_S
         has_ac  = dev.has_address_claim
-        status  = f"silent {int(now - last_ts)}s" if stale else ""
+        status  = f"silent {_fmt_since(now - last_ts)}" if stale else ""
         if sa_item.text(1) != status:
             sa_item.setText(1, status)
         if stale:
