@@ -55,7 +55,7 @@ def _fmt_since(seconds: float) -> str:
         return f"{s}s"
     if s < 3600:
         return f"{s // 60}m{s % 60:02d}s"
-    return f"{s // 3600}h{(s % 3600) // 60:02d}"
+    return f"{s // 3600}h{(s % 3600) // 60:02d}m"
 
 
 def _pgn_label(pgn: int) -> str:
