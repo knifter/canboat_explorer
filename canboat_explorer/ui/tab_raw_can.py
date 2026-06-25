@@ -214,7 +214,7 @@ class TimeViewModel(QAbstractTableModel):
             if not msg.is_complete:
                 return "Fast-packet sequence timed out before all frames arrived (incomplete)"
             if not msg.decoded:
-                return "Assembled NMEA 2000 message — the nmea2000 library could not decode the payload"
+                return "Assembled NMEA 2000 message — the nmea2000 library could not decode the frame"
 
         if role == Qt.ItemDataRole.ForegroundRole:
             flag = self._flag_for(frame, n2k)
