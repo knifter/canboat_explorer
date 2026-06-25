@@ -19,6 +19,7 @@ import sys
 import time
 
 from canboat_explorer.core.n2k_frame_info import n2k_frame_info
+from canboat_explorer.core.raw_frame import RawFrame
 
 BITRATE = 250_000
 
@@ -37,7 +38,7 @@ def _open_bus(interface: str, channel: str | int):
 
 def _fmt(msg) -> str:
     data = bytes(msg.data).hex(" ").upper()
-    n2k  = n2k_frame_info(msg)
+    n2k  = n2k_frame_info(RawFrame.wrap(msg))
     if n2k is None:
         return f"std  id={msg.arbitration_id:03X}  dlc={msg.dlc}  {data}"
     name_part = f"  ({n2k.description})" if n2k.description else ""

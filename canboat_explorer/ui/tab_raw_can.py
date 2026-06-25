@@ -21,16 +21,17 @@ from canboat_explorer.core.store import DataStore, Priority
 _COLS_TIME: list[tuple[str, str]] = [
     ("Time",    "Timestamp when the frame was received by the PC."),
     ("Arb ID",  "Full CAN arbitration ID (hex). 11 bits for standard frames, 29 bits for extended frames."),
+    ("EDP",     "Extended Data Page (bit 25 of the arbitration ID).\nA decode of the Arb ID, valid for any extended frame.\nAlways 0 for NMEA 2000 — a 1 marks a non-N2K extended frame (ISO 15765 / J1939 extended data page).\nBlank for standard 11-bit frames."),
     ("Type",    "Frame format: Std = standard (11-bit ID), Ext = extended (29-bit ID)."),
     ("SRR",     "Substitute Remote Request bit.\nOnly present in extended frames — occupies the RTR bit position of the base 11-bit ID.\nAlways 1 in extended frames; not present (—) in standard frames."),
     ("IDE",     "ID Extension bit.\n1 = extended frame (29-bit ID), 0 = standard frame (11-bit ID)."),
     ("RTR",     "Remote Transmission Request bit.\n1 = remote frame (requests data without sending any), 0 = data frame.\nAlways 0 on NMEA 2000."),
+    ("FD",      "CAN FD (Flexible Data-rate) frame.\n1 = CAN FD format (up to 64 data bytes), 0 = classic CAN.\nAlways 0 on NMEA 2000 — N2K is classic CAN only."),
     ("DLC",     "Data Length Code (0–8). Values 9–15 are valid on the wire in classic CAN but still mean 8 data bytes."),
     ("Data",    "Payload bytes (hex). Up to 8 bytes for classic CAN.\nUnused bytes are 0xFF per NMEA 2000 convention."),
     ("CRC",     "Cyclic Redundancy Check result.\nNot reported by the Waveshare adapter — only frames that passed hardware CRC are forwarded.\nOther adapters may report this field."),
     (" ",       "< CAN | NMEA >"),
     ("PGN",     "Parameter Group Number — NMEA 2000 message type.\nOnly present on extended-ID frames.\nDerived from bits 24–8 of the arbitration ID."),
-    ("EDP",     "Extended Data Page (bit 25 of the arbitration ID).\nAlways 0 for NMEA 2000 — a 1 marks a non-N2K extended frame (ISO 15765 / J1939 extended data page)."),
     ("DP",      "Data Page (bit 24 of the arbitration ID).\nThe high bit of the PGN; 1 selects the proprietary data page."),
     ("PF",      "PDU Format (bits 23–16 of the arbitration ID).\n< 240 = PDU1 (addressed: PS is the destination address); ≥ 240 = PDU2 (broadcast: PS is the group extension, folded into the PGN)."),
     ("PS",      "PDU Specific (bits 15–8 of the arbitration ID).\nDestination address when PDU1 (PF < 240); group extension when PDU2 (PF ≥ 240)."),
@@ -44,16 +45,17 @@ _COLS_TIME: list[tuple[str, str]] = [
 _COLS_ACCUM: list[tuple[str, str]] = [
     ("Last Time", "Timestamp of the most recent frame."),
     ("Arb ID",    "Full CAN arbitration ID (hex). 11 bits for standard frames, 29 bits for extended frames."),
+    ("EDP",       "Extended Data Page (arbitration bit 25). 0 for NMEA 2000; 1 = non-N2K extended frame."),
     ("Type",      "Frame format: Std = standard (11-bit ID), Ext = extended (29-bit ID)."),
     ("SRR",       "Substitute Remote Request bit.\nAlways 1 in extended frames; not present (—) in standard frames."),
     ("IDE",       "ID Extension bit. 1 = extended frame, 0 = standard frame."),
     ("RTR",       "Remote Transmission Request bit. 1 = remote frame, 0 = data frame.\nAlways 0 on NMEA 2000."),
+    ("FD",        "CAN FD frame. 1 = CAN FD, 0 = classic CAN.\nAlways 0 on NMEA 2000."),
     ("DLC",       "Data Length Code of the most recent frame."),
     ("Last Data", "Payload bytes of the most recent frame (hex)."),
     ("CRC",       "Cyclic Redundancy Check. Not reported by the Waveshare adapter."),
     (" ",         "< CAN | NMEA >"),
     ("PGN",       "Parameter Group Number (NMEA 2000 message type). Empty for non-N2K frames."),
-    ("EDP",       "Extended Data Page (arbitration bit 25). 0 for NMEA 2000; 1 = non-N2K extended frame."),
     ("DP",        "Data Page (arbitration bit 24) — high bit of the PGN."),
     ("PF",        "PDU Format (arbitration bits 23–16). < 240 = PDU1 (addressed); ≥ 240 = PDU2 (broadcast)."),
     ("PS",        "PDU Specific (arbitration bits 15–8). Destination address if PDU1; group extension if PDU2."),
@@ -66,8 +68,8 @@ _COLS_ACCUM: list[tuple[str, str]] = [
     ("Interval",  "Average interval between frames (ms), over the last 25 frames.\nRequires at least 2 frames."),
 ]
 
-_SEP_COL       = 9    # index of the "|" separator column in _COLS_TIME
-_SEP_COL_ACCUM = 9
+_SEP_COL       = 11   # index of the "|" separator column in _COLS_TIME
+_SEP_COL_ACCUM = 11
 
 _COLOR_IGNORE    = QColor(160, 160, 160)
 _COLOR_HIGHLIGHT = QColor(240, 190,  50)
@@ -178,27 +180,28 @@ class TimeViewModel(QAbstractTableModel):
             if frame.is_error_frame:
                 if col == 0: return _fmt_time(frame.timestamp)
                 if col == 1: return "ERROR"
-                if col == 7: return bytes(frame.data).rstrip(b"\x00").decode("ascii", errors="replace")
+                if col == 9: return bytes(frame.data).rstrip(b"\x00").decode("ascii", errors="replace")
                 return ""
             if col == 0:  return _fmt_time(frame.timestamp)
             if col == 1:  return f"{frame.arbitration_id:08X}"
-            if col == 2:  return "Ext" if frame.is_extended_id else "Std"
-            if col == 3:  return "1" if frame.is_extended_id else "—"
-            if col == 4:  return "1" if frame.is_extended_id else "0"
-            if col == 5:  return "1" if frame.is_remote_frame else "0"
-            if col == 6:  return str(frame.dlc)
-            if col == 7:  return bytes(frame.data[:frame.dlc]).hex(" ").upper()
-            if col == 8:  return "N/A"
-            if col == 10: return f"{n2k.pgn}  {self._store.pgn_sa_name(n2k.pgn, n2k.sa)}" if n2k else ""
-            if col == 11: return str(n2k.edp) if n2k else ""
-            if col == 12: return str(n2k.dp)  if n2k else ""
-            if col == 13: return str(n2k.pf)  if n2k else ""
-            if col == 14: return str(n2k.ps)  if n2k else ""
-            if col == 15: return str(n2k.sa) if n2k else ""
-            if col == 16: return str(n2k.dst) if (n2k and n2k.dst is not None) else ""
-            if col == 17: return str(n2k.priority) if n2k else ""
-            if col == 18: return str(n2k.seq)       if (n2k and n2k.seq       is not None) else ""
-            if col == 19: return str(n2k.frame_idx) if (n2k and n2k.frame_idx is not None) else ""
+            if col == 2:  return "" if frame.edp is None else str(frame.edp)
+            if col == 3:  return "Ext" if frame.is_extended_id else "Std"
+            if col == 4:  return "1" if frame.is_extended_id else "—"
+            if col == 5:  return "1" if frame.is_extended_id else "0"
+            if col == 6:  return "1" if frame.is_remote_frame else "0"
+            if col == 7:  return "1" if frame.is_fd else "0"
+            if col == 8:  return str(frame.dlc)
+            if col == 9:  return bytes(frame.data[:frame.dlc]).hex(" ").upper()
+            if col == 10: return "N/A"
+            if col == 12: return f"{n2k.pgn}  {self._store.pgn_sa_name(n2k.pgn, n2k.sa)}" if n2k else ""
+            if col == 13: return str(n2k.dp)  if n2k else ""
+            if col == 14: return str(n2k.pf)  if n2k else ""
+            if col == 15: return str(n2k.ps)  if n2k else ""
+            if col == 16: return str(n2k.sa) if n2k else ""
+            if col == 17: return str(n2k.dst) if (n2k and n2k.dst is not None) else ""
+            if col == 18: return str(n2k.priority) if n2k else ""
+            if col == 19: return str(n2k.seq)       if (n2k and n2k.seq       is not None) else ""
+            if col == 20: return str(n2k.frame_idx) if (n2k and n2k.frame_idx is not None) else ""
 
         if frame.is_error_frame:
             if role == Qt.ItemDataRole.BackgroundRole:
@@ -365,25 +368,26 @@ class AccumViewModel(QAbstractTableModel):
         if role == Qt.ItemDataRole.DisplayRole:
             if col == 0:  return _fmt_time(f.timestamp)
             if col == 1:  return f"{f.arbitration_id:08X}"
-            if col == 2:  return "Ext" if f.is_extended_id else "Std"
-            if col == 3:  return "1" if f.is_extended_id else "—"
-            if col == 4:  return "1" if f.is_extended_id else "0"
-            if col == 5:  return "1" if f.is_remote_frame else "0"
-            if col == 6:  return str(f.dlc)
-            if col == 7:  return bytes(f.data[:f.dlc]).hex(" ").upper()
-            if col == 8:  return "N/A"
-            if col == 10: return f"{n2k.pgn}  {self._store.pgn_sa_name(n2k.pgn, n2k.sa)}" if n2k else ""
-            if col == 11: return str(n2k.edp) if n2k else ""
-            if col == 12: return str(n2k.dp)  if n2k else ""
-            if col == 13: return str(n2k.pf)  if n2k else ""
-            if col == 14: return str(n2k.ps)  if n2k else ""
-            if col == 15: return str(n2k.sa) if n2k else ""
-            if col == 16: return str(n2k.dst) if (n2k and n2k.dst is not None) else ""
-            if col == 17: return str(n2k.priority) if n2k else ""
-            if col == 18: return str(n2k.seq)       if (n2k and n2k.seq       is not None) else ""
-            if col == 19: return str(n2k.frame_idx) if (n2k and n2k.frame_idx is not None) else ""
-            if col == 20: return str(entry.count)
-            if col == 21:
+            if col == 2:  return "" if f.edp is None else str(f.edp)
+            if col == 3:  return "Ext" if f.is_extended_id else "Std"
+            if col == 4:  return "1" if f.is_extended_id else "—"
+            if col == 5:  return "1" if f.is_extended_id else "0"
+            if col == 6:  return "1" if f.is_remote_frame else "0"
+            if col == 7:  return "1" if f.is_fd else "0"
+            if col == 8:  return str(f.dlc)
+            if col == 9:  return bytes(f.data[:f.dlc]).hex(" ").upper()
+            if col == 10: return "N/A"
+            if col == 12: return f"{n2k.pgn}  {self._store.pgn_sa_name(n2k.pgn, n2k.sa)}" if n2k else ""
+            if col == 13: return str(n2k.dp)  if n2k else ""
+            if col == 14: return str(n2k.pf)  if n2k else ""
+            if col == 15: return str(n2k.ps)  if n2k else ""
+            if col == 16: return str(n2k.sa) if n2k else ""
+            if col == 17: return str(n2k.dst) if (n2k and n2k.dst is not None) else ""
+            if col == 18: return str(n2k.priority) if n2k else ""
+            if col == 19: return str(n2k.seq)       if (n2k and n2k.seq       is not None) else ""
+            if col == 20: return str(n2k.frame_idx) if (n2k and n2k.frame_idx is not None) else ""
+            if col == 21: return str(entry.count)
+            if col == 22:
                 ms = entry.interval_ms
                 return f"{ms:.0f} ms" if ms is not None else "—"
 

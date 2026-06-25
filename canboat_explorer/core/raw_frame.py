@@ -42,6 +42,19 @@ class RawFrame(can.Message):
             stuffable = 19 + data_bits
         return base + data_bits + stuffable // 5
 
+    @property
+    def edp(self) -> int | None:
+        """Extended Data Page bit (bit 25 of the 29-bit arbitration ID).
+
+        Pure CAN / J1939 link-layer structure — present on every extended frame
+        regardless of NMEA 2000 conformance (N2K simply requires it to be 0; a 1
+        marks a non-N2K extended frame). None for standard 11-bit frames, which
+        have no EDP bit.
+        """
+        if not self.is_extended_id:
+            return None
+        return (self.arbitration_id >> 25) & 1
+
     @classmethod
     def wrap(cls, msg: can.Message) -> "RawFrame":
         return cls(
