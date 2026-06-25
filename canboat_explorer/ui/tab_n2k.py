@@ -19,7 +19,7 @@ from canboat_explorer.core.store import DataStore, Priority
 
 _COLOR_IGNORE    = QColor(160, 160, 160)
 _COLOR_HIGHLIGHT = QColor(240, 190,  50)
-_COLOR_WARNING   = QColor(210, 150,  60)
+_COLOR_WARNING   = QColor(195, 130,  80)
 _COLOR_ERROR     = QColor(185,  75,  75)
 _COLOR_ERROR_FG  = QColor(255, 255, 255)
 
