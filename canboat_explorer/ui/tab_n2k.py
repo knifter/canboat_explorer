@@ -213,7 +213,7 @@ def _msg_matches_filter(spec: FilterSpec, store: DataStore, msg: N2KMessage, fla
     """Test an NMEA-2000 message row against the global filter; flag booleans
     come from the already-computed effective flag so they match what's painted."""
     return spec.matches(
-        pgn=msg.pgn, sa=msg.sa,
+        pgn=msg.pgn, sa=msg.sa, dst=msg.dst,
         text=store.pgn_sa_name(msg.pgn, msg.sa),
         is_warning=(flag == "warning"),
         is_error=(flag == "error"),

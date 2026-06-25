@@ -226,12 +226,23 @@ class DecodedTab(QWidget):
         else:
             self._count_label.setText(f"{total:,} signals")
 
-    def _leaf_matches_filter(self, pgn: int, sa: int, leaf: QTreeWidgetItem) -> bool:
+    def _leaf_dst(self, key: tuple) -> int | None:
+        """Destination of the latest decoded message for this leaf, matching the
+        Tabs 1–2 convention: a broadcast (decoder reports 255, or no destination)
+        is None; an addressed message is its 0–253 address. None when the leaf has
+        no decoded message yet. The dst filter treats None as '(empty)'."""
+        dq  = self._store.decoded_by_key.get(key)
+        if not dq:
+            return None
+        dst = getattr(dq[0], "destination", None)
+        return None if dst == 255 else dst
+
+    def _leaf_matches_filter(self, pgn: int, sa: int, dst: int | None, leaf: QTreeWidgetItem) -> bool:
         flag     = self._store.get_user_flag_by_pgn(pgn)
         pgn_item = self._pgn_items.get(pgn)
         desc     = pgn_item.text(0) if pgn_item is not None else ""
         return self._filter_spec.matches(
-            pgn=pgn, sa=sa,
+            pgn=pgn, sa=sa, dst=dst,
             text=f"{desc} {leaf.text(0)}",   # fold PGN description in for name search
             is_highlighted=(flag == "highlight"),
             is_ignored=(flag == "ignore"),
@@ -242,7 +253,7 @@ class DecodedTab(QWidget):
         vis   = 0
         for key, leaf in self._leaf_items.items():
             pgn, sa, _qualifier = key
-            ok = empty or self._leaf_matches_filter(pgn, sa, leaf)
+            ok = empty or self._leaf_matches_filter(pgn, sa, self._leaf_dst(key), leaf)
             leaf.setHidden(not ok)
             if ok:
                 vis += 1

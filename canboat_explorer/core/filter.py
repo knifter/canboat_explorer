@@ -14,6 +14,7 @@ Empty inputs / inactive toggles are pass-through.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 
 def parse_int_list(text: str) -> frozenset[int]:
@@ -30,10 +31,22 @@ def parse_int_list(text: str) -> frozenset[int]:
     return frozenset(out)
 
 
+# matches(dst=…) sentinel: the calling tab supplies no destination for this row,
+# so the dst condition is skipped (pass-through). Distinct from dst=None, which
+# is a real value — a message with no destination (PDU2 broadcast), selectable
+# in the dst picker as "(empty)".
+_DST_UNSET: Any = object()
+
+# Token stored inside FilterSpec.dsts (an int set) that matches an empty (None)
+# destination. Surfaced in the dst picker as "(empty)".
+DST_EMPTY = -1
+
+
 @dataclass(frozen=True)
 class FilterSpec:
     pgns:         frozenset[int] = field(default_factory=frozenset)  # OR; empty = pass
     sas:          frozenset[int] = field(default_factory=frozenset)  # OR; empty = pass
+    dsts:         frozenset[int] = field(default_factory=frozenset)  # OR; empty = pass
     text:         str            = ""    # already lower-cased; empty = pass
     warnings:     bool           = False
     errors:       bool           = False
@@ -43,7 +56,7 @@ class FilterSpec:
     @property
     def is_empty(self) -> bool:
         """True when nothing restricts the view — lets models skip filtering."""
-        return not (self.pgns or self.sas or self.text
+        return not (self.pgns or self.sas or self.dsts or self.text
                     or self.warnings or self.errors or self.highlighted
                     or self.hide_ignored)
 
@@ -51,6 +64,7 @@ class FilterSpec:
         self, *,
         pgn:            int | None  = None,
         sa:             int | None  = None,
+        dst:            Any         = _DST_UNSET,
         text:           str         = "",
         is_warning:     bool | None = None,
         is_error:       bool | None = None,
@@ -61,6 +75,10 @@ class FilterSpec:
             return False
         if self.sas and sa is not None and sa not in self.sas:
             return False
+        if self.dsts and dst is not _DST_UNSET:
+            key = DST_EMPTY if dst is None else dst
+            if key not in self.dsts:
+                return False
         if self.text and self.text not in (text or "").lower():
             return False
 

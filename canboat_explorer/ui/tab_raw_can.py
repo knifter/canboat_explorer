@@ -91,12 +91,13 @@ def _row_matches_filter(spec: FilterSpec, store: DataStore, frame, n2k, flag: Pr
     painted; non-N2K frames pass PGN/SA/text through (None / "")."""
     if n2k is not None:
         pgn, sa = n2k.pgn, n2k.sa
+        dst     = n2k.dst
         text    = store.pgn_sa_name(pgn, sa)
     else:
-        pgn = sa = None
+        pgn = sa = dst = None
         text = ""
     return spec.matches(
-        pgn=pgn, sa=sa, text=text,
+        pgn=pgn, sa=sa, dst=dst, text=text,
         is_warning=(flag == "warning"),
         is_error=(flag == "error" or frame.is_error_frame),
         is_highlighted=(flag == "highlight"),

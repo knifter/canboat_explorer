@@ -75,17 +75,21 @@ class FilterBar(QWidget):
 
         self._pgn_edit  = _PickerLineEdit()
         self._sa_edit   = _PickerLineEdit()
+        self._dst_edit  = _PickerLineEdit()
         self._text_edit = QLineEdit()
         self._pgn_edit.setPlaceholderText("e.g. 130306,129025")
         self._sa_edit.setPlaceholderText("e.g. 12,35")
+        self._dst_edit.setPlaceholderText("e.g. 12,35")
         self._text_edit.setPlaceholderText("search name / text…")
         self._pgn_edit.setToolTip("Match one or more PGNs (comma list = OR).\nDouble-click to pick from observed PGNs.")
         self._sa_edit.setToolTip("Match one or more source addresses (comma list = OR).\nDouble-click to pick from observed source addresses.")
+        self._dst_edit.setToolTip("Match one or more destination addresses (comma list = OR).\nDouble-click to pick from observed destinations, including (empty) for messages with no destination (PDU2 broadcast).")
         self._text_edit.setToolTip(
             "Case-insensitive substring against the row's text "
             "(PGN description, resolved variant name, manufacturer, device name).")
         self._pgn_edit.setMaximumWidth(160)
         self._sa_edit.setMaximumWidth(110)
+        self._dst_edit.setMaximumWidth(110)
         self._text_edit.setMinimumWidth(160)
 
         self._warn_btn   = self._toggle("Warnings",
@@ -117,7 +121,7 @@ class FilterBar(QWidget):
         self._debounce.setInterval(_DEBOUNCE_MS)
         self._debounce.timeout.connect(self.changed)
 
-        for edit in (self._pgn_edit, self._sa_edit, self._text_edit):
+        for edit in (self._pgn_edit, self._sa_edit, self._dst_edit, self._text_edit):
             edit.textChanged.connect(self._debounce.start)
 
         # Keep the On/Off button's "actively filtering" tint in sync with state.
@@ -134,6 +138,8 @@ class FilterBar(QWidget):
         layout.addWidget(self._pgn_edit)
         layout.addWidget(QLabel("SA:"))
         layout.addWidget(self._sa_edit)
+        layout.addWidget(QLabel("Dst:"))
+        layout.addWidget(self._dst_edit)
         layout.addWidget(self._text_edit)
         layout.addSpacing(8)
         layout.addWidget(self._warn_btn)
@@ -172,6 +178,7 @@ class FilterBar(QWidget):
         return FilterSpec(
             pgns=parse_int_list(self._pgn_edit.text()),
             sas=parse_int_list(self._sa_edit.text()),
+            dsts=parse_int_list(self._dst_edit.text()),
             text=self._text_edit.text().strip().lower(),
             warnings=self._warn_btn.isChecked(),
             errors=self._err_btn.isChecked(),
@@ -185,10 +192,12 @@ class FilterBar(QWidget):
         amber tint logic so an external indicator can match it.)"""
         return not self.spec.is_empty
 
-    def set_sources(self, pgn_source: ValueSource, sa_source: ValueSource) -> None:
+    def set_sources(self, pgn_source: ValueSource, sa_source: ValueSource,
+                    dst_source: ValueSource) -> None:
         """Wire the double-click pickers to live observed-value providers."""
         self._pgn_edit.set_source(pgn_source)
         self._sa_edit.set_source(sa_source)
+        self._dst_edit.set_source(dst_source)
 
     def focus_search(self) -> None:
         self._text_edit.setFocus(Qt.FocusReason.ShortcutFocusReason)
@@ -210,12 +219,13 @@ class FilterBar(QWidget):
         self._enable_btn.setStyleSheet(_ACTIVE_BTN_STYLE if active else "")
 
     def _on_clear(self) -> None:
-        widgets = (self._pgn_edit, self._sa_edit, self._text_edit,
+        widgets = (self._pgn_edit, self._sa_edit, self._dst_edit, self._text_edit,
                    self._warn_btn, self._err_btn, self._hl_btn, self._ignore_btn)
         for w in widgets:
             w.blockSignals(True)
         self._pgn_edit.clear()
         self._sa_edit.clear()
+        self._dst_edit.clear()
         self._text_edit.clear()
         self._warn_btn.setChecked(False)
         self._err_btn.setChecked(False)

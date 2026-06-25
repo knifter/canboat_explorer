@@ -195,7 +195,8 @@ class MainWindow(QMainWindow):
         self._tabs.addTab(self._tab_decoded, self._TAB_NAMES[3])
 
         self._filter_bar = FilterBar()
-        self._filter_bar.set_sources(self._filter_pgn_values, self._filter_sa_values)
+        self._filter_bar.set_sources(self._filter_pgn_values, self._filter_sa_values,
+                                     self._filter_dst_values)
         self._filter_bar.changed.connect(self._apply_filter)
         self._filter_bar.changed.connect(self._update_filter_indicator)
         self._update_filter_indicator()
@@ -259,6 +260,16 @@ class MainWindow(QMainWindow):
         for sa in sorted(self._store.devices):
             dev = self._store.devices[sa]
             out.append((sa, f"{sa}  —  {dev.model}" if dev.model else str(sa)))
+        return out
+
+    def _filter_dst_values(self) -> list[tuple[int, str]]:
+        from canboat_explorer.core.filter import DST_EMPTY
+        # (empty) = no destination (PDU2 broadcast); 255 stays a normal address.
+        dsts = {m.dst for m in self._store.n2k_messages if m.dst is not None}
+        out: list[tuple[int, str]] = [(DST_EMPTY, "(empty)")]
+        for dst in sorted(dsts):
+            dev = self._store.devices.get(dst)
+            out.append((dst, f"{dst}  —  {dev.model}" if dev and dev.model else str(dst)))
         return out
 
     # ------------------------------------------------------------------
