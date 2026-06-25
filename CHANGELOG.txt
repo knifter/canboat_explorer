@@ -32,6 +32,18 @@ v1.1.3
  - double click is select & copy
  - Stop autoscroll if not at top, keep selection on the right row
  - hid vertical cursor like bars in columns on select, tab1, tab2
+
+v1.2.0
+ - Filters (pgn, sa, text) added
+ - network tab shows 'protocol specific' messages as well (heartbeat, pgn-list, etc)
+ - network messages no longer trigger a duplicate-pgn by sa warning
+ - Changed tab 3 address event into protocol events and add more protocol specific messages
+ - Expsose DST field from ArbId when a message is specifically directed to a SA
+ - undecoded frames (incomplete, non lib n2k decoded) are also flagged as warning as they're out of
+   protocol packets and interesting
+ - more detection of whether a frame 'could be' n2k and should be shown in tab 2 (f.e. EDP=1 frames != n2k)
+ - Enable filtering on dst-address as well (also empty and 255)
+ - display long periods as 1m15, 5h12
  
 ---- UPCOMING CHANGES: -----
 
