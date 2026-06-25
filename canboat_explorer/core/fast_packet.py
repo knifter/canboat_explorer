@@ -28,6 +28,7 @@ class N2KMessage:
     timestamp:   float   # timestamp of the first CAN frame
     payload:     bytes   # complete assembled payload
     frame_count: int     # number of CAN frames that made up this message
+    dst:         int | None = None   # PDU1 destination address; None when broadcast (PDU2)
     is_complete: bool = True   # False when the sequence timed out before completing
     decoded:     bool = False  # True if nmea2000 decoder returned a NMEA2000Message
     frames:      list[RawFrame] = field(default_factory=list)
@@ -45,6 +46,7 @@ class _Buffer:
     start_ts:            float
     last_frame_ts:       float
     first_frame:         RawFrame
+    dst:                 int | None = None
     contributing_frames: list[RawFrame] = field(default_factory=list)
 
 
@@ -70,6 +72,7 @@ class FastPacketReassembler:
                 timestamp=buf.start_ts,
                 payload=bytes(buf.first_frame.data[:buf.first_frame.dlc]),
                 frame_count=1,
+                dst=buf.dst,
                 is_complete=False,
                 frames=buf.contributing_frames,
             ))
@@ -87,6 +90,7 @@ class FastPacketReassembler:
                     start_ts=msg.timestamp,
                     last_frame_ts=msg.timestamp,
                     first_frame=msg,
+                    dst=n2k.dst,
                     contributing_frames=[msg],
                 )
             else:
@@ -95,6 +99,7 @@ class FastPacketReassembler:
                     timestamp=msg.timestamp,
                     payload=bytes(msg.data[:msg.dlc]),
                     frame_count=1,
+                    dst=n2k.dst,
                     frames=[msg],
                 ))
         else:
@@ -111,6 +116,7 @@ class FastPacketReassembler:
                         timestamp=buf.start_ts,
                         payload=bytes(buf.payload[:buf.expected_len]),
                         frame_count=buf.frame_count,
+                        dst=buf.dst,
                         frames=buf.contributing_frames,
                     ))
             else:
@@ -122,6 +128,7 @@ class FastPacketReassembler:
                     timestamp=msg.timestamp,
                     payload=bytes(msg.data[:msg.dlc]),
                     frame_count=1,
+                    dst=n2k.dst,
                     frames=[msg],
                 ))
 

@@ -28,6 +28,7 @@ _COLS_TIME: list[tuple[str, str]] = [
     ("PGN",          "Parameter Group Number — NMEA 2000 message type."),
     ("PGN Name",     "Human-readable name for this PGN, if known."),
     ("SA",           "Source Address — NMEA 2000 device address (0–253)."),
+    ("Dst",          "Destination Address for addressed (PDU1) messages; blank for broadcast (PDU2)."),
     ("Priority",     "NMEA 2000 message priority (0 = highest, 7 = lowest)."),
     ("Length",       "Total assembled payload length in bytes."),
     ("Payload",      "Assembled payload bytes (hex), without fast-packet control bytes."),
@@ -39,6 +40,7 @@ _COLS_ACCUM: list[tuple[str, str]] = [
     ("PGN",          "Parameter Group Number — NMEA 2000 message type."),
     ("PGN Name",     "Human-readable name for this PGN, if known."),
     ("SA",           "Source Address — NMEA 2000 device address (0–253)."),
+    ("Dst",          "Destination Address for addressed (PDU1) messages; blank for broadcast (PDU2)."),
     ("Priority",     "NMEA 2000 message priority (0 = highest, 7 = lowest)."),
     ("Length",       "Payload length of the most recent message in bytes."),
     ("Last Payload", "Assembled payload bytes of the most recent message (hex)."),
@@ -52,7 +54,7 @@ _GROUP_OPTIONS = ["None", "PGN + SA"]
 # The (Last) Payload column — same index in both _COLS_TIME and _COLS_ACCUM.
 # It stretches to absorb spare width and is the first to give way when the
 # window is too narrow, so the trailing columns (Count/Interval) stay visible.
-_PAYLOAD_COL = 6
+_PAYLOAD_COL = 7
 
 
 def _fmt_time(ts: float) -> str:
@@ -128,10 +130,11 @@ class N2KTimeViewModel(QAbstractTableModel):
             if col == 1: return str(msg.pgn)
             if col == 2: return self._store.pgn_sa_name(msg.pgn, msg.sa)
             if col == 3: return str(msg.sa)
-            if col == 4: return str(msg.priority)
-            if col == 5: return str(len(msg.payload))
-            if col == 6: return msg.payload.hex(" ").upper()
-            if col == 7: return str(msg.frame_count)
+            if col == 4: return str(msg.dst) if msg.dst is not None else ""
+            if col == 5: return str(msg.priority)
+            if col == 6: return str(len(msg.payload))
+            if col == 7: return msg.payload.hex(" ").upper()
+            if col == 8: return str(msg.frame_count)
             return None
 
         flag = _flag_for_message(self._store, msg)
@@ -280,11 +283,12 @@ class N2KAccumViewModel(QAbstractTableModel):
             if col == 1: return str(msg.pgn)
             if col == 2: return self._store.pgn_sa_name(msg.pgn, msg.sa)
             if col == 3: return str(msg.sa)
-            if col == 4: return str(msg.priority)
-            if col == 5: return str(len(msg.payload))
-            if col == 6: return msg.payload.hex(" ").upper()
-            if col == 7: return str(entry.count)
-            if col == 8:
+            if col == 4: return str(msg.dst) if msg.dst is not None else ""
+            if col == 5: return str(msg.priority)
+            if col == 6: return str(len(msg.payload))
+            if col == 7: return msg.payload.hex(" ").upper()
+            if col == 8: return str(entry.count)
+            if col == 9:
                 ms = entry.interval_ms
                 return f"{ms:.0f} ms" if ms is not None else "—"
             return None

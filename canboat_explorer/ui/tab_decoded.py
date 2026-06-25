@@ -43,6 +43,16 @@ def _qualifier_label(decoded_msg) -> str:
     return " / ".join(parts)
 
 
+def _dst_suffix(decoded_msg) -> str:
+    """'  →  SA:y' for an addressed (PDU1) message; '' for broadcast (255 / none)."""
+    dst = getattr(decoded_msg, "destination", None)
+    if dst is None:
+        return ""
+    if dst == 255:
+        return " (broadcast)"
+    return f"  →  SA:{dst}"
+
+
 def _rate_label(dq: deque) -> str:
     n = min(len(dq), RATE_WINDOW)
     if n < 2:
@@ -392,10 +402,10 @@ class DecodedTab(QWidget):
         if parent_type == "sa":
             sa        = parent.data(0, _ROLE_SA_KEY)[1]
             qualifier = _qualifier_label(decoded_msg) or leaf.text(0)
-            return f"{base}  —  SA:{sa}  —  {qualifier}"
+            return f"{base}  —  SA:{sa}{_dst_suffix(decoded_msg)}  —  {qualifier}"
         if parent_type == "pgn":
             sa = leaf.data(0, _ROLE_KEY)[1]
-            return f"{base}  —  SA:{sa}"
+            return f"{base}  —  SA:{sa}{_dst_suffix(decoded_msg)}"
         return base
 
     def _stacked_title(self, item: QTreeWidgetItem, sample_msg) -> str:

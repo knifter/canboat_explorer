@@ -13,6 +13,10 @@ class N2KFrameInfo(NamedTuple):
     description: str           # PGN description from canboat; "" if unknown
     sa:          int
     priority:    int
+    edp:         int           # bit 25: Extended Data Page (0 for NMEA 2000)
+    dp:          int           # bit 24: Data Page (high bit of the PGN)
+    pf:          int           # bits 23–16: PDU Format (<240 = PDU1, ≥240 = PDU2)
+    ps:          int           # bits 15–8: PDU Specific (destination if PDU1, group ext if PDU2)
     dst:         int | None    # PDU1: destination address; PDU2: None (broadcast)
     grp:         int | None    # PDU2: Group Extension; PDU1: None
     is_fast:     bool          # True if canboat marks PGN as "Fast" or PGN is unknown
@@ -28,6 +32,7 @@ def n2k_frame_info(msg: can.Message) -> N2KFrameInfo | None:
     priority = (arb >> 26) & 0x07
     sa       =  arb        & 0xFF
     pf       = (arb >> 16) & 0xFF
+    edp      = (arb >> 25) & 0x01
     dp       = (arb >> 24) & 0x01
     ps       = (arb >>  8) & 0xFF
 
@@ -50,4 +55,5 @@ def n2k_frame_info(msg: can.Message) -> N2KFrameInfo | None:
     else:
         seq = frame_idx = None
 
-    return N2KFrameInfo(pgn, description, sa, priority, dst, grp, is_fast, seq, frame_idx)
+    return N2KFrameInfo(pgn, description, sa, priority, edp, dp, pf, ps,
+                        dst, grp, is_fast, seq, frame_idx)
