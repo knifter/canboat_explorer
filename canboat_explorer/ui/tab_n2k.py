@@ -205,7 +205,7 @@ def _reason_for_message(msg: N2KMessage) -> str:
     if not msg.is_complete:
         return f"PGN {msg.pgn}: incomplete fast-packet sequence (timed out before all frames arrived)"
     if not msg.decoded:
-        return f"PGN {msg.pgn}: nmea2000 decoder could not parse the payload"
+        return f"PGN {msg.pgn}: nmea2000 decoder could not parse this message"
     return ""
 
 

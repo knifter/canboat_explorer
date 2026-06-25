@@ -208,8 +208,13 @@ class TimeViewModel(QAbstractTableModel):
             return None
 
         if role == Qt.ItemDataRole.ToolTipRole:
-            if frame.n2k_msg is None:
+            msg = frame.n2k_msg
+            if msg is None:
                 return "Frame did not participate in any assembled NMEA 2000 message (out-of-band)"
+            if not msg.is_complete:
+                return "Fast-packet sequence timed out before all frames arrived (incomplete)"
+            if not msg.decoded:
+                return "Assembled NMEA 2000 message — the nmea2000 library could not decode the payload"
 
         if role == Qt.ItemDataRole.ForegroundRole:
             flag = self._flag_for(frame, n2k)
@@ -233,8 +238,13 @@ class TimeViewModel(QAbstractTableModel):
         f = self._store.get_user_flag_by_arb(frame.arbitration_id)
         if f:
             return f
-        if frame.n2k_msg is None:
-            return "warning"
+        msg = frame.n2k_msg
+        if msg is None:
+            return "warning"          # out-of-band: non-ext / short — never reached the library
+        if not msg.is_complete:
+            return "error"            # fast-packet timed out before completing
+        if not msg.decoded:
+            return "warning"          # assembled but the nmea2000 library could not decode it
         return None
 
     def _passes_filter(self, i: int) -> bool:
@@ -378,8 +388,13 @@ class AccumViewModel(QAbstractTableModel):
                 return f"{ms:.0f} ms" if ms is not None else "—"
 
         if role == Qt.ItemDataRole.ToolTipRole:
-            if f.n2k_msg is None:
+            msg = f.n2k_msg
+            if msg is None:
                 return "Last frame did not participate in any assembled NMEA 2000 message (out-of-band)"
+            if not msg.is_complete:
+                return "Fast-packet sequence timed out before all frames arrived (incomplete)"
+            if not msg.decoded:
+                return "Assembled NMEA 2000 message — the nmea2000 library could not decode the payload"
 
         if role == Qt.ItemDataRole.ForegroundRole:
             flag = self._flag_for(f, n2k)
@@ -402,8 +417,13 @@ class AccumViewModel(QAbstractTableModel):
         f = self._store.get_user_flag_by_arb(frame.arbitration_id)
         if f:
             return f
-        if frame.n2k_msg is None:
-            return "warning"
+        msg = frame.n2k_msg
+        if msg is None:
+            return "warning"          # out-of-band: non-ext / short — never reached the library
+        if not msg.is_complete:
+            return "error"            # fast-packet timed out before completing
+        if not msg.decoded:
+            return "warning"          # assembled but the nmea2000 library could not decode it
         return None
 
     def refresh(self) -> None:
@@ -590,11 +610,23 @@ class RawCanTab(QWidget):
         self._update_count()
 
     def has_warnings(self) -> bool:
-        return self._store.oob_frame_count > 0
+        return (self._store.oob_frame_count
+                + self._store.incomplete_msg_count
+                + self._store.undecoded_msg_count) > 0
 
     def warning_text(self) -> str:
-        n = self._store.oob_frame_count
-        if n == 0:
+        oob = self._store.oob_frame_count
+        inc = self._store.incomplete_msg_count
+        und = self._store.undecoded_msg_count
+        if oob + inc + und == 0:
             return ""
-        return (f"{n:,} frame(s) could not be linked to an NMEA 2000 message "
-                "(out-of-band / non-N2K traffic). Count is cumulative for the session.")
+        parts = []
+        if oob:
+            parts.append(f"{oob:,} frame(s) not linked to any NMEA 2000 message "
+                         "(out-of-band / non-N2K traffic)")
+        if inc:
+            parts.append(f"{inc:,} incomplete fast-packet sequence(s)")
+        if und:
+            parts.append(f"{und:,} message(s) the decoder could not parse")
+        return ("Since capture started: " + "; ".join(parts) + ".\n"
+                "Counts are cumulative for the session.")
